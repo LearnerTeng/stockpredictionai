@@ -6,11 +6,11 @@ export function createHero() {
           <h1>Advanced Machine Learning for Trading Excellence</h1>
           <p>Harness the power of cutting-edge AI models including GANs, VAEs, and CNNs to revolutionize your trading strategies and maximize returns in volatile markets.</p>
           <div class="hero-buttons">
-            <a href="#models" class="btn-primary">
+            <a href="#predictor" class="btn-primary">
               <i class="fas fa-rocket"></i>
-              Explore Models
+              Launch Prediction Lab
             </a>
-            <a href="#results" class="btn-secondary">View Performance</a>
+            <a href="#models" class="btn-secondary">Explore Models</a>
           </div>
         </div>
       </div>

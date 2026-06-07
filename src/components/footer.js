@@ -1,4 +1,12 @@
-export function createFooter() {
+export function createFooter(options = {}) {
+  const {
+    modelsHref = '/#models',
+    featuresHref = '/#features',
+    imageLabHref = '/image-lab.html',
+    resultsHref = '/#results',
+    contactHref = '/#contact',
+  } = options
+
   return `
     <footer class="footer" id="contact">
       <div class="container">
@@ -9,17 +17,18 @@ export function createFooter() {
           </div>
           <div class="footer-section">
             <h3>Models</h3>
-            <p><a href="#models">Generative Adversarial Networks</a></p>
-            <p><a href="#models">Variational Autoencoders</a></p>
-            <p><a href="#models">Convolutional Neural Networks</a></p>
-            <p><a href="#models">Bayesian Networks</a></p>
+            <p><a href="${modelsHref}">Generative Adversarial Networks</a></p>
+            <p><a href="${modelsHref}">Variational Autoencoders</a></p>
+            <p><a href="${modelsHref}">Convolutional Neural Networks</a></p>
+            <p><a href="${modelsHref}">Bayesian Networks</a></p>
           </div>
           <div class="footer-section">
             <h3>Resources</h3>
-            <p><a href="#features">Documentation</a></p>
-            <p><a href="#results">Performance Reports</a></p>
-            <p><a href="#contact">API Reference</a></p>
-            <p><a href="#contact">Support Center</a></p>
+            <p><a href="${featuresHref}">Documentation</a></p>
+            <p><a href="${imageLabHref}">Image Lab</a></p>
+            <p><a href="${resultsHref}">Performance Reports</a></p>
+            <p><a href="${contactHref}">API Reference</a></p>
+            <p><a href="${contactHref}">Support Center</a></p>
           </div>
           <div class="footer-section">
             <h3>Contact</h3>
