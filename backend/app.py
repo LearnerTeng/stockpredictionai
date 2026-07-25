@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
-from math import sqrt
+from math import cos, pi, sin, sqrt
 import os
 from pathlib import Path
 from statistics import StatisticsError, linear_regression, mean, pstdev
@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 from flask import Flask, abort, jsonify, request, send_from_directory
 from flask_cors import CORS
 from market_data.service import store as market_data_store
+from trading.service import store as trading_store
 import requests
 
 try:
@@ -52,6 +53,10 @@ class PredictRequest:
 class AnalyzeRequest:
     analysis_mode: str
     prediction: dict[str, Any]
+
+
+DEFAULT_MONITOR_SYMBOLS = ["AAPL", "MSFT", "NVDA", "GS", "SPY"]
+YAHOO_RANGE_OPTIONS = {"3mo", "6mo", "1y", "2y", "5y"}
 
 
 def _image_service_url(path: str) -> str:
@@ -266,6 +271,228 @@ def _fetch_prices(symbol: str) -> list[float]:
     return closes
 
 
+def _fetch_yahoo_bars(symbol: str, range_value: str = "1y") -> list[dict[str, Any]]:
+    normalized_symbol = str(symbol or "").strip().upper()
+    if not normalized_symbol:
+        raise ValueError("symbol is required")
+
+    normalized_range = str(range_value or "1y").strip().lower()
+    if normalized_range not in YAHOO_RANGE_OPTIONS:
+        raise ValueError(f"range must be one of: {', '.join(sorted(YAHOO_RANGE_OPTIONS))}")
+
+    endpoint = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{normalized_symbol}"
+        f"?range={normalized_range}&interval=1d&includeAdjustedClose=true"
+    )
+    req = Request(
+        endpoint,
+        headers={
+            "User-Agent": "stockpredictionai/1.0",
+            "Accept": "application/json",
+        },
+    )
+
+    try:
+        with urlopen(req, timeout=15) as response:
+            payload = json.load(response)
+    except HTTPError as err:
+        raise RuntimeError(f"Yahoo Finance returned HTTP {err.code} for {normalized_symbol}") from err
+    except URLError as err:
+        raise RuntimeError(f"Failed to reach Yahoo Finance: {err.reason}") from err
+
+    chart = payload.get("chart") or {}
+    if chart.get("error"):
+        message = chart["error"].get("description") or "Unknown upstream error"
+        raise RuntimeError(f"Yahoo Finance rejected {normalized_symbol}: {message}")
+
+    result = (chart.get("result") or [{}])[0]
+    timestamps = result.get("timestamp") or []
+    indicators = result.get("indicators") or {}
+    quote = (indicators.get("quote") or [{}])[0]
+    adjclose = (indicators.get("adjclose") or [{}])[0]
+
+    bars: list[dict[str, Any]] = []
+    for index, timestamp in enumerate(timestamps):
+        close = _list_value(quote.get("close"), index)
+        if close is None:
+            continue
+        bars.append(
+            {
+                "date": datetime.fromtimestamp(int(timestamp), timezone.utc).date().isoformat(),
+                "open": _list_value(quote.get("open"), index),
+                "high": _list_value(quote.get("high"), index),
+                "low": _list_value(quote.get("low"), index),
+                "close": close,
+                "adj_close": _list_value(adjclose.get("adjclose"), index),
+                "volume": _list_value(quote.get("volume"), index),
+            }
+        )
+
+    if not bars:
+        raise RuntimeError(f"No daily bars returned for symbol {normalized_symbol}")
+    return bars
+
+
+def _list_value(values: Any, index: int) -> Any:
+    if not isinstance(values, list) or index >= len(values):
+        return None
+    value = values[index]
+    if value is None:
+        return None
+    return value
+
+
+def _sma(values: list[float], window: int) -> float | None:
+    if len(values) < window:
+        return None
+    return mean(values[-window:])
+
+
+def _ema(values: list[float], window: int) -> float | None:
+    if len(values) < window:
+        return None
+    alpha = 2 / (window + 1)
+    ema_value = mean(values[:window])
+    for value in values[window:]:
+        ema_value = (value * alpha) + (ema_value * (1 - alpha))
+    return ema_value
+
+
+def _rsi(values: list[float], window: int = 14) -> float | None:
+    if len(values) <= window:
+        return None
+    deltas = [curr - prev for prev, curr in zip(values, values[1:])]
+    recent = deltas[-window:]
+    gains = [max(delta, 0.0) for delta in recent]
+    losses = [abs(min(delta, 0.0)) for delta in recent]
+    avg_loss = mean(losses)
+    if avg_loss == 0:
+        return 100.0
+    rs = mean(gains) / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def _fourier_trend(values: list[float]) -> dict[str, Any]:
+    sample = values[-min(len(values), 90) :]
+    if len(sample) < 20:
+        return {"direction": "flat", "strength": 0.0}
+
+    detrended = [value - mean(sample) for value in sample]
+    n = len(detrended)
+    low_frequency_scores: list[float] = []
+    for frequency in (1, 2, 3):
+        real = sum(value * cos(2 * pi * frequency * index / n) for index, value in enumerate(detrended))
+        imag = sum(value * sin(2 * pi * frequency * index / n) for index, value in enumerate(detrended))
+        low_frequency_scores.append(sqrt(real**2 + imag**2) / n)
+
+    try:
+        slope, _intercept = linear_regression(range(len(sample)), sample)
+    except StatisticsError:
+        slope = 0.0
+
+    baseline = max(abs(mean(sample)), 1.0)
+    strength = min(abs(slope) / baseline * 1000 + sum(low_frequency_scores) / baseline, 1.0)
+    direction = "up" if slope > 0 else "down" if slope < 0 else "flat"
+    return {
+        "direction": direction,
+        "strength": round(strength, 4),
+        "slope": round(slope, 6),
+    }
+
+
+def _build_monitor_signal(symbol: str, bars: list[dict[str, Any]]) -> dict[str, Any]:
+    sorted_bars = sorted(bars, key=lambda bar: bar.get("trade_date") or bar.get("date") or "")
+    closes = [float(bar["close"]) for bar in sorted_bars if bar.get("close") is not None]
+    if len(closes) < 30:
+        raise ValueError(f"{symbol} needs at least 30 bars for monitoring")
+
+    last_bar = sorted_bars[-1]
+    latest_close = closes[-1]
+    previous_close = closes[-2]
+    change = latest_close - previous_close
+    change_pct = (change / previous_close * 100) if previous_close else 0.0
+    sma_7 = _sma(closes, 7)
+    sma_21 = _sma(closes, 21)
+    ema_12 = _ema(closes, 12)
+    ema_26 = _ema(closes, 26)
+    rsi_14 = _rsi(closes, 14)
+    recent_returns = [
+        (curr - prev) / prev
+        for prev, curr in zip(closes[-31:-1], closes[-30:])
+        if prev
+    ]
+    volatility = pstdev(recent_returns) * sqrt(252) if len(recent_returns) > 2 else 0.0
+    forecast_steps = 5
+    forecast_window = min(45, len(closes) - forecast_steps)
+    predictions = _forecast_series(closes[:-forecast_steps], forecast_window, forecast_steps)
+    actuals = closes[-forecast_steps:]
+    forecast_delta_pct = ((predictions[-1] - latest_close) / latest_close * 100) if latest_close else 0.0
+    mae = mean(abs(pred - actual) for pred, actual in zip(predictions, actuals))
+    trend = _fourier_trend(closes)
+
+    score = 50.0
+    if sma_7 is not None and sma_21 is not None:
+        score += 12 if sma_7 > sma_21 else -12
+    if ema_12 is not None and ema_26 is not None:
+        score += 10 if ema_12 > ema_26 else -10
+    if rsi_14 is not None:
+        if rsi_14 < 35:
+            score += 8
+        elif rsi_14 > 70:
+            score -= 8
+    score += max(min(forecast_delta_pct, 12), -12)
+    score += 6 if trend["direction"] == "up" else -6 if trend["direction"] == "down" else 0
+    score -= min(volatility * 10, 12)
+    score = min(max(score, 0), 100)
+
+    if score >= 68:
+        stance = "watch-positive"
+    elif score <= 38:
+        stance = "watch-risk"
+    else:
+        stance = "neutral"
+
+    alerts: list[str] = []
+    if abs(change_pct) >= 3:
+        alerts.append(f"Daily move {change_pct:.2f}% exceeds the 3% monitor threshold.")
+    if rsi_14 is not None and rsi_14 >= 70:
+        alerts.append("RSI is in an overbought zone.")
+    if rsi_14 is not None and rsi_14 <= 30:
+        alerts.append("RSI is in an oversold zone.")
+    if volatility >= 0.45:
+        alerts.append("Annualized recent volatility is elevated.")
+    if not alerts:
+        alerts.append("No threshold alert on the latest run.")
+
+    return {
+        "symbol": symbol,
+        "trade_date": last_bar.get("trade_date") or last_bar.get("date"),
+        "latest_close": round(latest_close, 4),
+        "change": round(change, 4),
+        "change_pct": round(change_pct, 4),
+        "score": round(score, 2),
+        "stance": stance,
+        "indicators": {
+            "sma_7": round(sma_7, 4) if sma_7 is not None else None,
+            "sma_21": round(sma_21, 4) if sma_21 is not None else None,
+            "ema_12": round(ema_12, 4) if ema_12 is not None else None,
+            "ema_26": round(ema_26, 4) if ema_26 is not None else None,
+            "rsi_14": round(rsi_14, 4) if rsi_14 is not None else None,
+            "volatility_30d_annualized": round(volatility, 4),
+            "fourier_trend": trend,
+        },
+        "forecast": {
+            "steps": forecast_steps,
+            "predictions": [round(value, 4) for value in predictions],
+            "actuals": [round(value, 4) for value in actuals],
+            "delta_pct": round(forecast_delta_pct, 4),
+            "mae": round(mae, 4),
+        },
+        "alerts": alerts,
+        "historical_tail": [round(value, 4) for value in closes[-60:]],
+    }
+
+
 def _predict_next(window: list[float]) -> float:
     if len(window) < 3:
         return float(window[-1])
@@ -390,6 +617,173 @@ def data_list_prices(symbol: str) -> tuple[Any, int]:
         return jsonify({"items": market_data_store.list_daily_bars(symbol, limit)}), 200
     except ValueError as err:
         return jsonify({"error": str(err)}), 400
+
+
+@app.post("/data/import-yahoo")
+def data_import_yahoo() -> tuple[Any, int]:
+    try:
+        payload = _require_json_object()
+        items = _require_symbols_payload(payload)
+        symbols = [str(item.get("symbol", item) if isinstance(item, dict) else item) for item in items]
+        range_value = str(payload.get("range", "1y") or "1y")
+        batch = market_data_store.create_import_batch(
+            symbols=symbols,
+            source=f"yahoo-{range_value}",
+            notes="Imported by local monitor",
+        )
+
+        imported: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        for symbol in symbols:
+            normalized_symbol = str(symbol).strip().upper()
+            try:
+                bars = _fetch_yahoo_bars(normalized_symbol, range_value)
+                result = market_data_store.ingest_daily_bars(
+                    normalized_symbol,
+                    bars,
+                    source="yahoo",
+                    batch_id=batch["id"],
+                )
+                imported.append(result)
+            except Exception as err:  # noqa: BLE001
+                errors.append({"symbol": normalized_symbol, "error": str(err)})
+
+        return jsonify({"batch": market_data_store.get_import_batch(batch["id"]), "imported": imported, "errors": errors}), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+
+
+@app.post("/monitor/run")
+def monitor_run() -> tuple[Any, int]:
+    try:
+        payload = _require_json_object()
+        raw_symbols = payload.get("symbols", DEFAULT_MONITOR_SYMBOLS)
+        if isinstance(raw_symbols, str):
+            symbols = [symbol.strip().upper() for symbol in raw_symbols.split(",") if symbol.strip()]
+        elif isinstance(raw_symbols, list):
+            symbols = [str(symbol).strip().upper() for symbol in raw_symbols if str(symbol).strip()]
+        else:
+            raise ValueError("symbols must be an array or comma-separated string")
+        if not symbols:
+            raise ValueError("symbols must contain at least one symbol")
+
+        range_value = str(payload.get("range", "1y") or "1y")
+        results: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        for symbol in symbols:
+            try:
+                bars = _fetch_yahoo_bars(symbol, range_value)
+                market_data_store.ingest_daily_bars(symbol, bars, source="yahoo-monitor")
+                results.append(_build_monitor_signal(symbol, bars))
+            except Exception as err:  # noqa: BLE001
+                errors.append({"symbol": symbol, "error": str(err)})
+
+        trading_store.upsert_monitor_signals(results)
+
+        return jsonify(
+            {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "range": range_value,
+                "items": results,
+                "errors": errors,
+                "disclaimer": "Local monitoring signal only. It is not investment advice.",
+            }
+        ), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+
+
+@app.get("/monitor/status")
+def monitor_status() -> tuple[Any, int]:
+    raw_symbols = request.args.get("symbols", "")
+    symbols = [symbol.strip().upper() for symbol in raw_symbols.split(",") if symbol.strip()]
+    if not symbols:
+        symbols = [item["symbol"] for item in market_data_store.list_symbols()[:8]] or DEFAULT_MONITOR_SYMBOLS
+
+    items: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for symbol in symbols:
+        try:
+            bars = market_data_store.list_daily_bars(symbol, 260)
+            if not bars:
+                errors.append({"symbol": symbol, "error": "No local bars. Run monitor refresh first."})
+                continue
+            items.append(_build_monitor_signal(symbol, bars))
+        except Exception as err:  # noqa: BLE001
+            errors.append({"symbol": symbol, "error": str(err)})
+
+    return jsonify(
+        {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "items": items,
+            "errors": errors,
+            "summary": market_data_store.universe_summary(),
+        }
+    ), 200
+
+
+@app.get("/dashboard")
+def dashboard() -> tuple[Any, int]:
+    return jsonify(trading_store.get_dashboard()), 200
+
+
+@app.get("/recommendations")
+def recommendations() -> tuple[Any, int]:
+    return jsonify({"items": trading_store.list_recommendations(), "data_mode": "demo"}), 200
+
+
+@app.get("/recommendations/<symbol>")
+def recommendation_detail(symbol: str) -> tuple[Any, int]:
+    try:
+        return jsonify(trading_store.get_recommendation(symbol)), 200
+    except ValueError as err:
+        status = 404 if "not found" in str(err) else 400
+        return jsonify({"error": str(err)}), status
+
+
+@app.get("/portfolio")
+def portfolio() -> tuple[Any, int]:
+    try:
+        return jsonify(trading_store.get_portfolio()), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 404
+
+
+@app.get("/portfolio/performance")
+def portfolio_performance() -> tuple[Any, int]:
+    try:
+        return jsonify(trading_store.get_performance()), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 404
+
+
+@app.get("/trading/orders")
+def trading_orders() -> tuple[Any, int]:
+    try:
+        limit = int(request.args.get("limit", 50))
+        return jsonify({"items": trading_store.list_orders(limit), "mode": "paper"}), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+
+
+@app.post("/trading/orders")
+def trading_create_order() -> tuple[Any, int]:
+    try:
+        payload = _require_json_object()
+        client_order_id = request.headers.get("Idempotency-Key")
+        order = trading_store.create_order(payload, client_order_id)
+        return jsonify(order), 201
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+
+
+@app.post("/trading/orders/<order_id>/confirm")
+def trading_confirm_order(order_id: str) -> tuple[Any, int]:
+    try:
+        return jsonify(trading_store.confirm_order(order_id)), 200
+    except ValueError as err:
+        status = 404 if "not found" in str(err) else 409
+        return jsonify({"error": str(err)}), status
 
 
 @app.get("/image/health")

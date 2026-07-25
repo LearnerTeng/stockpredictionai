@@ -23,3 +23,13 @@ export async function postJson(path, payload) {
 
   return data
 }
+
+export async function getJson(path) {
+  const response = await fetch(`${API_BASE}${path}`)
+  const data = await parseJson(response, path)
+  if (!response.ok) {
+    throw new Error(data.error || `${path} request failed`)
+  }
+
+  return data
+}

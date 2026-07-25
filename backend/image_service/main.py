@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from io import BytesIO
@@ -49,7 +50,7 @@ def ensure_storage() -> None:
         directory.mkdir(parents=True, exist_ok=True)
 
     with DB_LOCK:
-        with sqlite3.connect(DB_PATH) as conn:
+        with closing(sqlite3.connect(DB_PATH)) as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS image_jobs (
@@ -84,7 +85,7 @@ def get_connection() -> sqlite3.Connection:
 def insert_job(job_id: str, job_type: str, algorithm: str, input_path: str) -> None:
     now = utc_now_iso()
     with DB_LOCK:
-        with get_connection() as conn:
+        with closing(get_connection()) as conn:
             conn.execute(
                 """
                 INSERT INTO image_jobs (
@@ -109,7 +110,7 @@ def update_job_state(
     updated_at = utc_now_iso()
     finished_at = updated_at if finished else None
     with DB_LOCK:
-        with get_connection() as conn:
+        with closing(get_connection()) as conn:
             conn.execute(
                 """
                 UPDATE image_jobs
@@ -136,13 +137,13 @@ def update_job_state(
 
 def fetch_job_row(job_id: str) -> sqlite3.Row | None:
     with DB_LOCK:
-        with get_connection() as conn:
+        with closing(get_connection()) as conn:
             return conn.execute("SELECT * FROM image_jobs WHERE id = ?", (job_id,)).fetchone()
 
 
 def fetch_history_rows(limit: int, offset: int) -> list[sqlite3.Row]:
     with DB_LOCK:
-        with get_connection() as conn:
+        with closing(get_connection()) as conn:
             return conn.execute(
                 """
                 SELECT * FROM image_jobs

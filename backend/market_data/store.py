@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import date, datetime, timezone
 import json
 from pathlib import Path
@@ -51,7 +52,7 @@ class MarketDataStore:
 
     def init_schema(self) -> None:
         with self._lock:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn:
                 conn.executescript(
                     """
                     CREATE TABLE IF NOT EXISTS stock_universe (
@@ -108,7 +109,7 @@ class MarketDataStore:
 
     def universe_summary(self) -> dict[str, Any]:
         with self._lock:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn:
                 summary = conn.execute(
                     """
                     SELECT
@@ -151,7 +152,7 @@ class MarketDataStore:
             )
 
         with self._lock:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn:
                 for item in normalized:
                     existing = conn.execute(
                         "SELECT created_at FROM stock_universe WHERE symbol = ?",
@@ -190,7 +191,7 @@ class MarketDataStore:
 
     def list_symbols(self) -> list[dict[str, Any]]:
         with self._lock:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn:
                 rows = conn.execute(
                     """
                     SELECT symbol, name, exchange, sector, status, recommendation_score, notes, created_at, updated_at
@@ -218,7 +219,7 @@ class MarketDataStore:
         source_name = str(source or "").strip() or "manual"
 
         with self._lock:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn:
                 conn.execute(
                     """
                     INSERT INTO import_batches (
@@ -245,7 +246,7 @@ class MarketDataStore:
 
     def list_import_batches(self) -> list[dict[str, Any]]:
         with self._lock:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn:
                 rows = conn.execute(
                     """
                     SELECT *
@@ -258,7 +259,7 @@ class MarketDataStore:
 
     def get_import_batch(self, batch_id: str) -> dict[str, Any]:
         with self._lock:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn:
                 row = conn.execute(
                     "SELECT * FROM import_batches WHERE id = ?",
                     (batch_id,),
@@ -300,7 +301,7 @@ class MarketDataStore:
             imported_dates.append(trade_date)
 
         with self._lock:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn:
                 existing_symbol = conn.execute(
                     "SELECT symbol FROM stock_universe WHERE symbol = ?",
                     (normalized_symbol,),
@@ -386,7 +387,7 @@ class MarketDataStore:
         normalized_symbol = normalize_symbol(symbol)
         normalized_limit = min(max(int(limit), 1), 500)
         with self._lock:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn:
                 rows = conn.execute(
                     """
                     SELECT symbol, trade_date, open, high, low, close, adj_close, volume, source, batch_id, created_at

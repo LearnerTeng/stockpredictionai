@@ -4,6 +4,7 @@ export function createHeader(options = {}) {
     featuresHref = '/#features',
     modelsHref = '/#models',
     labHref = '/#predictor',
+    monitorHref = '/monitor.html',
     imageLabHref = '/image-lab.html',
     insightsHref = '/insights.html',
     contactHref = '/#contact',
@@ -14,6 +15,7 @@ export function createHeader(options = {}) {
 
   const insightsClass = activePage === 'insights' ? 'is-active' : ''
   const labClass = activePage === 'lab' ? 'is-active' : ''
+  const monitorClass = activePage === 'monitor' ? 'is-active' : ''
   const imageLabClass = activePage === 'image-lab' ? 'is-active' : ''
 
   return `
@@ -29,6 +31,7 @@ export function createHeader(options = {}) {
               <li><a href="${featuresHref}">Features</a></li>
               <li><a href="${modelsHref}">Models</a></li>
               <li><a href="${labHref}" class="${labClass}">Lab</a></li>
+              <li><a href="${monitorHref}" class="${monitorClass}">Monitor</a></li>
               <li><a href="${imageLabHref}" class="${imageLabClass}">Image Lab</a></li>
               <li><a href="${insightsHref}" class="${insightsClass}">Insights</a></li>
               <li><a href="${contactHref}">Contact</a></li>
