@@ -152,15 +152,24 @@ td > small, .symbol-cell span { display: block; color: #657b91; font-size: 9px; 
 .stock-quote span:first-child { grid-column: 1/-1; color: var(--muted); font-size: 8px; }
 .stock-quote strong { font: 600 22px 'Space Grotesk'; }
 .stock-hero-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(270px, .7fr); gap: 16px; margin-bottom: 16px; }
+.stock-command-grid { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(290px, .72fr); gap: 16px; margin-bottom: 16px; }
 .price-chart { width: 100%; min-height: 420px; }
+.chart-canvas-compact { height: 240px; }
 .empty-chart { min-height: 420px; display: flex; align-items: center; justify-content: center; flex-direction: column; color: var(--muted); text-align: center; }
 .empty-chart strong { color: var(--text); }
 .empty-chart span { margin: 6px 0 14px; font-size: 10px; }
 .empty-chart a { color: var(--green); font-size: 10px; }
 .score-panel { display: flex; flex-direction: column; align-items: center; padding-top: 35px; text-align: center; }
+.stock-score-panel { align-items: stretch; text-align: left; }
+.stock-score-panel .score-ring { align-self: center; }
 .score-panel h2 { margin: 16px 0 4px; font: 600 20px 'Space Grotesk'; }
 .score-panel > p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.6; }
 .factor-list-large { width: 100%; margin-top: 26px; text-align: left; }
+.prediction-readout { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; margin-top: auto; padding-top: 18px; }
+.prediction-readout > div { min-width: 0; padding: 13px; background: rgba(4,13,22,.38); border: 1px solid rgba(32,50,72,.72); border-radius: 9px; }
+.prediction-readout svg { width: 16px; color: var(--green); }
+.prediction-readout span { display: block; margin: 7px 0 5px; color: var(--muted); font-size: 8px; }
+.prediction-readout strong { font: 600 15px 'Space Grotesk'; }
 .three-column-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .info-card > svg { color: var(--green); }
 .info-card > span { display: block; margin: 16px 0 6px; color: var(--muted); font-size: 9px; }
@@ -233,6 +242,27 @@ td > small, .symbol-cell span { display: block; color: #657b91; font-size: 9px; 
 .status-risk_rejected { color: var(--red); background: rgba(255,107,122,.09); }
 .empty-table { padding: 30px; color: var(--muted); text-align: center; font-size: 10px; }
 
+.simulation-ticket { margin-bottom: 16px; }
+.simulation-form { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; }
+.simulation-form label { display: flex; flex-direction: column; gap: 7px; color: var(--muted); font-size: 9px; }
+.simulation-form input { width: 100%; padding: 11px 12px; color: var(--text); outline: 0; background: #08131e; border: 1px solid var(--border); border-radius: 8px; font: 600 13px 'Space Grotesk'; }
+.simulation-form input:focus { border-color: rgba(61,214,166,.5); }
+.ai-entry-strip { display: grid; grid-template-columns: minmax(260px,.75fr) minmax(0,1.25fr); gap: 16px; margin-bottom: 16px; }
+.ai-entry-strip > div { display: flex; align-items: center; gap: 12px; padding: 17px 18px; background: linear-gradient(145deg, rgba(17,37,50,.92), rgba(10,22,34,.94)); border: 1px solid rgba(61,214,166,.18); border-radius: 14px; }
+.ai-entry-strip svg { color: var(--green); }
+.ai-entry-strip span { display: block; color: var(--muted); font-size: 9px; }
+.ai-entry-strip strong { font: 600 16px 'Space Grotesk'; }
+.ai-entry-strip p { margin: 0; color: #9bafc3; font-size: 10px; line-height: 1.6; }
+.simulation-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; }
+.scenario-panel .panel-title > strong { font: 600 21px 'Space Grotesk'; white-space: nowrap; }
+.scenario-kpis { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 9px; margin-bottom: 14px; }
+.scenario-kpis > div { min-width: 0; padding: 12px; background: rgba(4,13,22,.38); border: 1px solid rgba(32,50,72,.7); border-radius: 9px; }
+.scenario-kpis span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 8px; }
+.scenario-kpis strong { font: 600 13px 'Space Grotesk'; overflow-wrap: anywhere; }
+.simulation-assessment { display: grid; gap: 7px; margin: 13px 0; }
+.simulation-assessment p { margin: 0; padding: 10px 12px; color: #8fa3b7; background: rgba(255,255,255,.02); border-left: 2px solid rgba(61,214,166,.5); font-size: 9px; line-height: 1.55; }
+.scenario-table { max-height: 260px; }
+
 .drop-zone { min-height: 330px; display: flex; align-items: center; justify-content: center; flex-direction: column; overflow: hidden; cursor: pointer; color: #607a92; background: repeating-linear-gradient(135deg, rgba(255,255,255,.01) 0 8px, transparent 8px 16px); border: 1px dashed #35506a; border-radius: 11px; }
 .drop-zone input { display: none; }
 .drop-zone svg { margin-bottom: 15px; }
@@ -251,7 +281,7 @@ td > small, .symbol-cell span { display: block; color: #657b91; font-size: 9px; 
 
 @media (max-width: 1180px) {
   .kpi-grid { grid-template-columns: repeat(2,1fr); }
-  .stock-hero-grid { grid-template-columns: 1fr; }
+  .stock-hero-grid, .stock-command-grid, .simulation-grid { grid-template-columns: 1fr; }
   .score-panel { min-height: 380px; }
 }
 
@@ -264,9 +294,10 @@ td > small, .symbol-cell span { display: block; color: #657b91; font-size: 9px; 
   .brand-row .mobile-only { margin-left: auto; }
   .topbar { padding: 0 18px; }
   .page-content { padding: 28px 18px 60px; }
-  .dashboard-grid, .equal-grid, .assistant-layout, .trading-grid, .image-lab-grid { grid-template-columns: 1fr; }
+  .dashboard-grid, .equal-grid, .assistant-layout, .trading-grid, .image-lab-grid, .ai-entry-strip { grid-template-columns: 1fr; }
   .recommendation-grid { grid-template-columns: 1fr; }
   .three-column-grid { grid-template-columns: 1fr; }
+  .simulation-form { grid-template-columns: 1fr; }
   .portfolio-summary { grid-template-columns: repeat(2,1fr); }
   .portfolio-summary > div:nth-child(2) { border-right: 0; }
   .portfolio-summary > div:nth-child(-n+2) { border-bottom: 1px solid rgba(61,214,166,.13); }
@@ -287,4 +318,7 @@ td > small, .symbol-cell span { display: block; color: #657b91; font-size: 9px; 
   .recommendation-card-head .score-ring { width: 72px; height: 72px; }
   .recommendation-card-head .score-ring::before { width: 64px; height: 64px; }
   .stock-quote { width: 100%; }
+  .scenario-kpis { grid-template-columns: 1fr 1fr; }
+  .simulation-ticket .panel-title { align-items: stretch; flex-direction: column; }
+  .simulation-ticket .primary-button { width: 100%; }
 }

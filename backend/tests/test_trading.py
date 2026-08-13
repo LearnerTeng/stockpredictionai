@@ -15,6 +15,27 @@ from app import app  # noqa: E402
 from trading.store import TradingStore  # noqa: E402
 
 
+def make_bars(count: int = 80) -> list[dict]:
+    from datetime import date, timedelta
+
+    bars = []
+    price = 100.0
+    start = date(2026, 1, 1)
+    for index in range(count):
+        price += 0.4
+        bars.append(
+            {
+                "date": (start + timedelta(days=index)).isoformat(),
+                "close": round(price, 4),
+                "open": round(price - 0.2, 4),
+                "high": round(price + 0.5, 4),
+                "low": round(price - 0.5, 4),
+                "volume": 1_000_000 + index,
+            }
+        )
+    return bars
+
+
 class TradingStoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
@@ -96,6 +117,18 @@ class TradingApiTests(unittest.TestCase):
         confirm_response = self.client.post(f"/trading/orders/{draft['id']}/confirm")
         self.assertEqual(confirm_response.status_code, 200)
         self.assertEqual(confirm_response.get_json()["status"], "paper_filled")
+
+    def test_position_simulation_api(self) -> None:
+        response = self.client.post(
+            "/simulation/position",
+            json={"symbol": "TEST", "quantity": 5, "entry_price": 110, "forecast_steps": 6, "bars": make_bars()},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["symbol"], "TEST")
+        self.assertEqual(len(payload["scenarios"]), 2)
+        self.assertGreater(len(payload["forecast_bars"]), 0)
 
 
 if __name__ == "__main__":

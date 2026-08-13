@@ -1,12 +1,12 @@
 import { LineChart, PieChart } from 'echarts/charts'
-import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+import { GridComponent, LegendComponent, MarkLineComponent, TooltipComponent } from 'echarts/components'
 import { graphic, init, use, type EChartsCoreOption } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { CandlestickSeries, createChart, HistogramSeries, type Time } from 'lightweight-charts'
 import { useEffect, useRef } from 'react'
-import type { PerformancePoint, Position, PriceBar } from '../types'
+import type { PerformancePoint, Position, PriceBar, SimulationPoint } from '../types'
 
-use([LineChart, PieChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
+use([LineChart, PieChart, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent, CanvasRenderer])
 
 function useEChart(option: EChartsCoreOption) {
   const ref = useRef<HTMLDivElement>(null)
@@ -67,6 +67,43 @@ export function AllocationChart({ positions, cash }: { positions: Position[]; ca
   return <div ref={ref} className="chart-canvas" />
 }
 
+export function SimulationPnlChart({ points }: { points: SimulationPoint[] }) {
+  const option: EChartsCoreOption = {
+    animationDuration: 650,
+    tooltip: { trigger: 'axis', backgroundColor: '#101b2a', borderColor: '#2b4059', textStyle: { color: '#e8f1fb' } },
+    legend: { right: 0, textStyle: { color: '#91a4ba' }, data: ['P/L %', 'Position value'] },
+    grid: { left: 8, right: 12, top: 42, bottom: 10, containLabel: true },
+    xAxis: { ...baseAxis, type: 'category', boundaryGap: false, data: points.map((point) => point.trade_date.slice(5)) },
+    yAxis: [
+      { ...baseAxis, type: 'value', axisLabel: { ...baseAxis.axisLabel, formatter: '{value}%' } },
+      { ...baseAxis, type: 'value', axisLabel: { ...baseAxis.axisLabel, formatter: '${value}' } },
+    ],
+    series: [
+      {
+        name: 'P/L %',
+        type: 'line',
+        smooth: 0.3,
+        showSymbol: false,
+        data: points.map((point) => point.pnl_pct),
+        lineStyle: { width: 3, color: '#3dd6a6' },
+        areaStyle: { color: 'rgba(61,214,166,.08)' },
+        markLine: { symbol: 'none', lineStyle: { color: '#38546f', type: 'dashed' }, data: [{ yAxis: 0 }] },
+      },
+      {
+        name: 'Position value',
+        type: 'line',
+        yAxisIndex: 1,
+        smooth: 0.28,
+        showSymbol: false,
+        data: points.map((point) => point.value),
+        lineStyle: { width: 2, color: '#58a6ff' },
+      },
+    ],
+  }
+  const ref = useEChart(option)
+  return <div ref={ref} className="chart-canvas chart-canvas-compact" />
+}
+
 export function PriceChart({ bars }: { bars: PriceBar[] }) {
   const container = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -80,7 +117,7 @@ export function PriceChart({ bars }: { bars: PriceBar[] }) {
     })
     const candles = chart.addSeries(CandlestickSeries, { upColor: '#3dd6a6', downColor: '#ff6b7a', borderVisible: false, wickUpColor: '#3dd6a6', wickDownColor: '#ff6b7a' })
     const volume = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: '', color: '#35506d' }, 1)
-    const sorted = [...bars].reverse()
+    const sorted = [...bars].sort((left, right) => left.trade_date.localeCompare(right.trade_date))
     candles.setData(sorted.map((bar) => ({
       time: bar.trade_date as Time,
       open: bar.open ?? bar.close,

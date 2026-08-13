@@ -3,17 +3,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
-from math import cos, pi, sin, sqrt
 import os
 from pathlib import Path
-from statistics import StatisticsError, linear_regression, mean, pstdev
+from statistics import mean
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from flask import Flask, abort, jsonify, request, send_from_directory
 from flask_cors import CORS
 from market_data.service import store as market_data_store
+from stock_ai.data import DEFAULT_RANGE_OPTIONS, list_value as stock_list_value
+from stock_ai.features import (
+    ema as stock_ema,
+    fourier_trend as stock_fourier_trend,
+    rsi as stock_rsi,
+    sma as stock_sma,
+)
+from stock_ai.pipeline import PredictionRequest, StockAiPipeline
+from stock_ai.simulation import PositionSimulationConfig
 from trading.service import store as trading_store
 import requests
 
@@ -41,7 +47,6 @@ IMAGE_UPLOADS_DIR = IMAGE_STORAGE_ROOT / "uploads"
 IMAGE_GENERATED_DIR = IMAGE_STORAGE_ROOT / "generated"
 IMAGE_SERVICE_TIMEOUT = (10, 120)
 
-
 @dataclass
 class PredictRequest:
     symbol: str
@@ -56,7 +61,8 @@ class AnalyzeRequest:
 
 
 DEFAULT_MONITOR_SYMBOLS = ["AAPL", "MSFT", "NVDA", "GS", "SPY"]
-YAHOO_RANGE_OPTIONS = {"3mo", "6mo", "1y", "2y", "5y"}
+YAHOO_RANGE_OPTIONS = DEFAULT_RANGE_OPTIONS
+stock_ai_pipeline = StockAiPipeline()
 
 
 def _image_service_url(path: str) -> str:
@@ -229,307 +235,43 @@ def _parse_analysis_request(payload: dict[str, Any]) -> AnalyzeRequest:
 
 
 def _fetch_prices(symbol: str) -> list[float]:
-    endpoint = (
-        f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-        "?range=5y&interval=1d&includeAdjustedClose=true"
-    )
-    req = Request(
-        endpoint,
-        headers={
-            "User-Agent": "stockpredictionai/1.0",
-            "Accept": "application/json",
-        },
-    )
-
-    try:
-        with urlopen(req, timeout=15) as response:
-            payload = json.load(response)
-    except HTTPError as err:
-        raise RuntimeError(f"Yahoo Finance returned HTTP {err.code} for {symbol}") from err
-    except URLError as err:
-        raise RuntimeError(f"Failed to reach Yahoo Finance: {err.reason}") from err
-
-    chart = payload.get("chart") or {}
-    if chart.get("error"):
-        message = chart["error"].get("description") or "Unknown upstream error"
-        raise RuntimeError(f"Yahoo Finance rejected {symbol}: {message}")
-
-    result = (chart.get("result") or [{}])[0]
-    indicators = result.get("indicators") or {}
-    adjclose = indicators.get("adjclose") or []
-    quote = indicators.get("quote") or []
-
-    series: list[Any] = []
-    if adjclose and isinstance(adjclose[0], dict):
-        series = adjclose[0].get("adjclose") or []
-    if not series and quote and isinstance(quote[0], dict):
-        series = quote[0].get("close") or []
-
-    closes = [float(value) for value in series if value is not None]
-    if not closes:
-        raise RuntimeError(f"No closing prices returned for symbol {symbol}")
-    return closes
+    return stock_ai_pipeline.market_data.fetch_prices(symbol)
 
 
 def _fetch_yahoo_bars(symbol: str, range_value: str = "1y") -> list[dict[str, Any]]:
-    normalized_symbol = str(symbol or "").strip().upper()
-    if not normalized_symbol:
-        raise ValueError("symbol is required")
-
-    normalized_range = str(range_value or "1y").strip().lower()
-    if normalized_range not in YAHOO_RANGE_OPTIONS:
-        raise ValueError(f"range must be one of: {', '.join(sorted(YAHOO_RANGE_OPTIONS))}")
-
-    endpoint = (
-        f"https://query1.finance.yahoo.com/v8/finance/chart/{normalized_symbol}"
-        f"?range={normalized_range}&interval=1d&includeAdjustedClose=true"
-    )
-    req = Request(
-        endpoint,
-        headers={
-            "User-Agent": "stockpredictionai/1.0",
-            "Accept": "application/json",
-        },
-    )
-
-    try:
-        with urlopen(req, timeout=15) as response:
-            payload = json.load(response)
-    except HTTPError as err:
-        raise RuntimeError(f"Yahoo Finance returned HTTP {err.code} for {normalized_symbol}") from err
-    except URLError as err:
-        raise RuntimeError(f"Failed to reach Yahoo Finance: {err.reason}") from err
-
-    chart = payload.get("chart") or {}
-    if chart.get("error"):
-        message = chart["error"].get("description") or "Unknown upstream error"
-        raise RuntimeError(f"Yahoo Finance rejected {normalized_symbol}: {message}")
-
-    result = (chart.get("result") or [{}])[0]
-    timestamps = result.get("timestamp") or []
-    indicators = result.get("indicators") or {}
-    quote = (indicators.get("quote") or [{}])[0]
-    adjclose = (indicators.get("adjclose") or [{}])[0]
-
-    bars: list[dict[str, Any]] = []
-    for index, timestamp in enumerate(timestamps):
-        close = _list_value(quote.get("close"), index)
-        if close is None:
-            continue
-        bars.append(
-            {
-                "date": datetime.fromtimestamp(int(timestamp), timezone.utc).date().isoformat(),
-                "open": _list_value(quote.get("open"), index),
-                "high": _list_value(quote.get("high"), index),
-                "low": _list_value(quote.get("low"), index),
-                "close": close,
-                "adj_close": _list_value(adjclose.get("adjclose"), index),
-                "volume": _list_value(quote.get("volume"), index),
-            }
-        )
-
-    if not bars:
-        raise RuntimeError(f"No daily bars returned for symbol {normalized_symbol}")
-    return bars
+    return stock_ai_pipeline.market_data.fetch_daily_bars(symbol, range_value)
 
 
 def _list_value(values: Any, index: int) -> Any:
-    if not isinstance(values, list) or index >= len(values):
-        return None
-    value = values[index]
-    if value is None:
-        return None
-    return value
+    return stock_list_value(values, index)
 
 
 def _sma(values: list[float], window: int) -> float | None:
-    if len(values) < window:
-        return None
-    return mean(values[-window:])
+    return stock_sma(values, window)
 
 
 def _ema(values: list[float], window: int) -> float | None:
-    if len(values) < window:
-        return None
-    alpha = 2 / (window + 1)
-    ema_value = mean(values[:window])
-    for value in values[window:]:
-        ema_value = (value * alpha) + (ema_value * (1 - alpha))
-    return ema_value
+    return stock_ema(values, window)
 
 
 def _rsi(values: list[float], window: int = 14) -> float | None:
-    if len(values) <= window:
-        return None
-    deltas = [curr - prev for prev, curr in zip(values, values[1:])]
-    recent = deltas[-window:]
-    gains = [max(delta, 0.0) for delta in recent]
-    losses = [abs(min(delta, 0.0)) for delta in recent]
-    avg_loss = mean(losses)
-    if avg_loss == 0:
-        return 100.0
-    rs = mean(gains) / avg_loss
-    return 100 - (100 / (1 + rs))
+    return stock_rsi(values, window)
 
 
 def _fourier_trend(values: list[float]) -> dict[str, Any]:
-    sample = values[-min(len(values), 90) :]
-    if len(sample) < 20:
-        return {"direction": "flat", "strength": 0.0}
-
-    detrended = [value - mean(sample) for value in sample]
-    n = len(detrended)
-    low_frequency_scores: list[float] = []
-    for frequency in (1, 2, 3):
-        real = sum(value * cos(2 * pi * frequency * index / n) for index, value in enumerate(detrended))
-        imag = sum(value * sin(2 * pi * frequency * index / n) for index, value in enumerate(detrended))
-        low_frequency_scores.append(sqrt(real**2 + imag**2) / n)
-
-    try:
-        slope, _intercept = linear_regression(range(len(sample)), sample)
-    except StatisticsError:
-        slope = 0.0
-
-    baseline = max(abs(mean(sample)), 1.0)
-    strength = min(abs(slope) / baseline * 1000 + sum(low_frequency_scores) / baseline, 1.0)
-    direction = "up" if slope > 0 else "down" if slope < 0 else "flat"
-    return {
-        "direction": direction,
-        "strength": round(strength, 4),
-        "slope": round(slope, 6),
-    }
+    return stock_fourier_trend(values)
 
 
 def _build_monitor_signal(symbol: str, bars: list[dict[str, Any]]) -> dict[str, Any]:
-    sorted_bars = sorted(bars, key=lambda bar: bar.get("trade_date") or bar.get("date") or "")
-    closes = [float(bar["close"]) for bar in sorted_bars if bar.get("close") is not None]
-    if len(closes) < 30:
-        raise ValueError(f"{symbol} needs at least 30 bars for monitoring")
-
-    last_bar = sorted_bars[-1]
-    latest_close = closes[-1]
-    previous_close = closes[-2]
-    change = latest_close - previous_close
-    change_pct = (change / previous_close * 100) if previous_close else 0.0
-    sma_7 = _sma(closes, 7)
-    sma_21 = _sma(closes, 21)
-    ema_12 = _ema(closes, 12)
-    ema_26 = _ema(closes, 26)
-    rsi_14 = _rsi(closes, 14)
-    recent_returns = [
-        (curr - prev) / prev
-        for prev, curr in zip(closes[-31:-1], closes[-30:])
-        if prev
-    ]
-    volatility = pstdev(recent_returns) * sqrt(252) if len(recent_returns) > 2 else 0.0
-    forecast_steps = 5
-    forecast_window = min(45, len(closes) - forecast_steps)
-    predictions = _forecast_series(closes[:-forecast_steps], forecast_window, forecast_steps)
-    actuals = closes[-forecast_steps:]
-    forecast_delta_pct = ((predictions[-1] - latest_close) / latest_close * 100) if latest_close else 0.0
-    mae = mean(abs(pred - actual) for pred, actual in zip(predictions, actuals))
-    trend = _fourier_trend(closes)
-
-    score = 50.0
-    if sma_7 is not None and sma_21 is not None:
-        score += 12 if sma_7 > sma_21 else -12
-    if ema_12 is not None and ema_26 is not None:
-        score += 10 if ema_12 > ema_26 else -10
-    if rsi_14 is not None:
-        if rsi_14 < 35:
-            score += 8
-        elif rsi_14 > 70:
-            score -= 8
-    score += max(min(forecast_delta_pct, 12), -12)
-    score += 6 if trend["direction"] == "up" else -6 if trend["direction"] == "down" else 0
-    score -= min(volatility * 10, 12)
-    score = min(max(score, 0), 100)
-
-    if score >= 68:
-        stance = "watch-positive"
-    elif score <= 38:
-        stance = "watch-risk"
-    else:
-        stance = "neutral"
-
-    alerts: list[str] = []
-    if abs(change_pct) >= 3:
-        alerts.append(f"Daily move {change_pct:.2f}% exceeds the 3% monitor threshold.")
-    if rsi_14 is not None and rsi_14 >= 70:
-        alerts.append("RSI is in an overbought zone.")
-    if rsi_14 is not None and rsi_14 <= 30:
-        alerts.append("RSI is in an oversold zone.")
-    if volatility >= 0.45:
-        alerts.append("Annualized recent volatility is elevated.")
-    if not alerts:
-        alerts.append("No threshold alert on the latest run.")
-
-    return {
-        "symbol": symbol,
-        "trade_date": last_bar.get("trade_date") or last_bar.get("date"),
-        "latest_close": round(latest_close, 4),
-        "change": round(change, 4),
-        "change_pct": round(change_pct, 4),
-        "score": round(score, 2),
-        "stance": stance,
-        "indicators": {
-            "sma_7": round(sma_7, 4) if sma_7 is not None else None,
-            "sma_21": round(sma_21, 4) if sma_21 is not None else None,
-            "ema_12": round(ema_12, 4) if ema_12 is not None else None,
-            "ema_26": round(ema_26, 4) if ema_26 is not None else None,
-            "rsi_14": round(rsi_14, 4) if rsi_14 is not None else None,
-            "volatility_30d_annualized": round(volatility, 4),
-            "fourier_trend": trend,
-        },
-        "forecast": {
-            "steps": forecast_steps,
-            "predictions": [round(value, 4) for value in predictions],
-            "actuals": [round(value, 4) for value in actuals],
-            "delta_pct": round(forecast_delta_pct, 4),
-            "mae": round(mae, 4),
-        },
-        "alerts": alerts,
-        "historical_tail": [round(value, 4) for value in closes[-60:]],
-    }
+    return stock_ai_pipeline.build_signal(symbol, bars)
 
 
 def _predict_next(window: list[float]) -> float:
-    if len(window) < 3:
-        return float(window[-1])
-
-    last_value = window[-1]
-    avg_value = mean(window)
-    deltas = [curr - prev for prev, curr in zip(window, window[1:])]
-    recent_deltas = deltas[-min(8, len(deltas)) :]
-    momentum = mean(recent_deltas)
-
-    try:
-        slope, intercept = linear_regression(range(len(window)), window)
-        trend_estimate = slope * len(window) + intercept
-    except StatisticsError:
-        trend_estimate = last_value
-
-    volatility = pstdev(recent_deltas) if len(recent_deltas) > 1 else 0.0
-    mean_reversion = 0.18 * (last_value - avg_value)
-    blended = (0.55 * trend_estimate) + (0.45 * (last_value + momentum)) - mean_reversion
-    next_value = last_value + ((blended - last_value) * 0.82)
-
-    if volatility:
-        upper = last_value + momentum + (2.2 * volatility)
-        lower = last_value + momentum - (2.2 * volatility)
-        next_value = min(max(next_value, lower), upper)
-
-    return max(next_value, 0.01)
+    return stock_ai_pipeline.forecaster.predict_next(window)
 
 
 def _forecast_series(series: list[float], history_window: int, forecast_steps: int) -> list[float]:
-    working = list(series[-history_window:])
-    preds: list[float] = []
-    for _ in range(forecast_steps):
-        next_value = _predict_next(working)
-        preds.append(next_value)
-        working = working[1:] + [next_value]
-    return preds
+    return stock_ai_pipeline.forecaster.forecast_series(series, history_window, forecast_steps)
 
 
 @app.get("/health")
@@ -1039,49 +781,14 @@ def _generate_ai_analysis(req: AnalyzeRequest) -> dict[str, Any]:
 def predict() -> tuple[dict, int]:
     try:
         req = _parse_request(request.get_json(silent=True) or {})
-        closes = _fetch_prices(req.symbol)
-        min_needed = req.history_window + req.forecast_steps + 20
-        if len(closes) < min_needed:
-            return (
-                jsonify(
-                    {
-                        "error": (
-                            f"Not enough data for {req.symbol}. "
-                            f"Need at least {min_needed} daily prices, found {len(closes)}"
-                        )
-                    }
-                ),
-                400,
+        result = stock_ai_pipeline.predict(
+            PredictionRequest(
+                symbol=req.symbol,
+                history_window=req.history_window,
+                forecast_steps=req.forecast_steps,
             )
-
-        train_end = len(closes) - req.forecast_steps
-        train_series = closes[:train_end]
-        test_series = closes[train_end:]
-        preds = _forecast_series(train_series, req.history_window, req.forecast_steps)
-
-        mae = mean(abs(pred - actual) for pred, actual in zip(preds, test_series))
-        rmse = sqrt(mean((pred - actual) ** 2 for pred, actual in zip(preds, test_series)))
-
-        historical_tail_len = min(60, len(closes))
-        historical_tail = closes[-historical_tail_len:]
-
-        return (
-            jsonify(
-                {
-                    "symbol": req.symbol,
-                    "history_window": req.history_window,
-                    "forecast_steps": req.forecast_steps,
-                    "predictions": [round(v, 4) for v in preds],
-                    "actuals": [round(v, 4) for v in test_series],
-                    "metrics": {
-                        "mae": round(mae, 4),
-                        "rmse": round(rmse, 4),
-                    },
-                    "historical_tail": [round(v, 4) for v in historical_tail],
-                }
-            ),
-            200,
         )
+        return jsonify(result), 200
     except ValueError as err:
         return jsonify({"error": str(err)}), 400
     except Exception as err:  # noqa: BLE001
@@ -1102,6 +809,168 @@ def analyze() -> tuple[dict, int]:
         return jsonify({"error": message}), status
     except Exception as err:  # noqa: BLE001
         return jsonify({"error": f"AI analysis failed: {err}"}), 502
+
+
+@app.get("/pipeline/architecture")
+def pipeline_architecture() -> tuple[Any, int]:
+    return jsonify(
+        {
+            "modules": [
+                {
+                    "step": 1,
+                    "name": "data",
+                    "path": "backend/stock_ai/data.py",
+                    "current": "Yahoo chart API provider + news provider interface",
+                    "extension": "Add yfinance/API/crawler provider behind MarketDataProvider or NewsProvider.",
+                },
+                {
+                    "step": 2,
+                    "name": "features",
+                    "path": "backend/stock_ai/features.py",
+                    "current": "SMA, EMA, RSI, volatility, Fourier trend",
+                    "extension": "Add qlib or custom feature sets behind TechnicalFeatureEngineer.",
+                },
+                {
+                    "step": 3,
+                    "name": "models",
+                    "path": "backend/stock_ai/models.py",
+                    "current": "Lightweight statistical forecaster",
+                    "extension": "Swap in LSTM/Transformer/FinBERT adapters with the same forecast contract.",
+                },
+                {
+                    "step": 4,
+                    "name": "strategy",
+                    "path": "backend/stock_ai/strategy.py",
+                    "current": "Recommendation score with recommended > 50% flag",
+                    "extension": "Tune ScorePolicy thresholds and component weights.",
+                },
+                {
+                    "step": 5,
+                    "name": "backtesting",
+                    "path": "backend/stock_ai/backtesting.py",
+                    "current": "Dependency-light threshold backtester",
+                    "extension": "Wire Backtrader behind the same run contract.",
+                },
+                {
+                    "step": 6,
+                    "name": "notifications",
+                    "path": "backend/stock_ai/notifications.py",
+                    "current": "Dry-run app notification dispatcher",
+                    "extension": "Add email, LINE, or app notifier implementations.",
+                },
+                {
+                    "step": 7,
+                    "name": "execution",
+                    "path": "backend/stock_ai/execution.py",
+                    "current": "Manual order ticket only",
+                    "extension": "Keep brokerage submission outside this app unless explicit compliance work is done.",
+                },
+            ],
+            "entrypoint": "backend/stock_ai/pipeline.py",
+            "safety": "The pipeline can generate recommendations and manual order tickets, but it does not send live broker orders.",
+        }
+    ), 200
+
+
+def _resolve_signal_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    signal = payload.get("signal")
+    if isinstance(signal, dict):
+        return signal
+
+    symbol = str(payload.get("symbol", "")).strip().upper()
+    if not symbol:
+        raise ValueError("symbol or signal is required")
+
+    bars = payload.get("bars")
+    if isinstance(bars, list) and bars:
+        return stock_ai_pipeline.build_signal(symbol, bars)
+
+    local_bars = market_data_store.list_daily_bars(symbol, int(payload.get("limit", 260)))
+    if local_bars:
+        return stock_ai_pipeline.build_signal(symbol, local_bars)
+
+    range_value = str(payload.get("range", "1y") or "1y")
+    yahoo_bars = _fetch_yahoo_bars(symbol, range_value)
+    return stock_ai_pipeline.build_signal(symbol, yahoo_bars)
+
+
+@app.post("/backtest/run")
+def backtest_run() -> tuple[Any, int]:
+    try:
+        payload = _require_json_object()
+        symbol = str(payload.get("symbol", "")).strip().upper()
+        if not symbol:
+            raise ValueError("symbol is required")
+
+        bars = payload.get("bars")
+        if not isinstance(bars, list) or not bars:
+            local_bars = market_data_store.list_daily_bars(symbol, int(payload.get("limit", 500)))
+            bars = local_bars or _fetch_yahoo_bars(symbol, str(payload.get("range", "1y") or "1y"))
+
+        return jsonify(stock_ai_pipeline.backtest(symbol, bars)), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    except Exception as err:  # noqa: BLE001
+        return jsonify({"error": f"Backtest failed: {err}"}), 500
+
+
+@app.post("/simulation/position")
+def position_simulation() -> tuple[Any, int]:
+    try:
+        payload = _require_json_object()
+        symbol = str(payload.get("symbol", "")).strip().upper()
+        if not symbol:
+            raise ValueError("symbol is required")
+
+        quantity = float(payload.get("quantity", 1))
+        entry_price = payload.get("entry_price")
+        entry_date = payload.get("entry_date")
+        forecast_steps = int(payload.get("forecast_steps", 20))
+        bars = payload.get("bars")
+        if not isinstance(bars, list) or not bars:
+            local_bars = market_data_store.list_daily_bars(symbol, int(payload.get("limit", 260)))
+            bars = local_bars or _fetch_yahoo_bars(symbol, str(payload.get("range", "1y") or "1y"))
+            if bars:
+                market_data_store.ingest_daily_bars(symbol, bars, source="simulation-yahoo")
+
+        config = PositionSimulationConfig(
+            quantity=quantity,
+            entry_price=float(entry_price) if entry_price not in (None, "") else None,
+            entry_date=str(entry_date) if entry_date not in (None, "") else None,
+            forecast_steps=forecast_steps,
+        )
+        return jsonify(stock_ai_pipeline.simulate_position(symbol, bars, config)), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    except Exception as err:  # noqa: BLE001
+        return jsonify({"error": f"Position simulation failed: {err}"}), 500
+
+
+@app.post("/notifications/signal")
+def notification_signal() -> tuple[Any, int]:
+    try:
+        payload = _require_json_object()
+        signal = _resolve_signal_payload(payload)
+        channel = str(payload.get("channel", "app") or "app")
+        return jsonify({"notification": stock_ai_pipeline.notify(signal, channel), "signal": signal}), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    except Exception as err:  # noqa: BLE001
+        return jsonify({"error": f"Notification failed: {err}"}), 500
+
+
+@app.post("/manual-orders/ticket")
+def manual_order_ticket() -> tuple[Any, int]:
+    try:
+        payload = _require_json_object()
+        signal = _resolve_signal_payload(payload)
+        quantity = float(payload.get("quantity", 1))
+        ticket = stock_ai_pipeline.manual_order_ticket(signal, quantity)
+        return jsonify({"ticket": ticket, "signal": signal}), 201
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    except Exception as err:  # noqa: BLE001
+        return jsonify({"error": f"Manual order ticket failed: {err}"}), 500
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ import type {
   DashboardData,
   PaperOrder,
   Portfolio,
+  PositionSimulation,
   PredictionResult,
   PriceBar,
   Recommendation,
@@ -59,6 +60,17 @@ export const api = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ analysis_mode: 'full', prediction }),
+  }),
+  simulatePosition: (payload: {
+    symbol: string
+    quantity: number
+    entry_price?: number
+    entry_date?: string
+    forecast_steps?: number
+  }) => request<PositionSimulation>('/simulation/position', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
   }),
   analyzeImage: async (file: File) => {
     const body = new FormData()

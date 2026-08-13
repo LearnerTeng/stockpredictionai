@@ -121,3 +121,48 @@ export interface AnalysisResult {
   disclaimer: string
   generated_at: string
 }
+
+export interface SimulationPoint {
+  trade_date: string
+  close: number
+  value: number
+  pnl: number
+  pnl_pct: number
+  projected: boolean
+}
+
+export interface PositionScenario {
+  id: 'manual' | 'ai_timing'
+  label: string
+  quantity: number
+  entry_date: string
+  entry_price: number
+  cost_basis: number
+  latest_value: number
+  pnl: number
+  pnl_pct: number
+  max_drawdown_pct: number
+  points: SimulationPoint[]
+  assessment: string[]
+}
+
+export interface PositionSimulation {
+  symbol: string
+  latest_bar: PriceBar & { projected?: boolean }
+  forecast_bars: Array<PriceBar & { projected: boolean }>
+  ai_entry: {
+    symbol: string
+    trade_date: string
+    price: number
+    score: number
+    stance: string
+    reason: string
+  }
+  scenarios: PositionScenario[]
+  engine: {
+    forecast_model: string
+    signal_model: string
+    forecast_steps: number
+  }
+  disclaimer: string
+}
