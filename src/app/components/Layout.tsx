@@ -4,6 +4,7 @@ import {
   CandlestickChart,
   FlaskConical,
   LayoutDashboard,
+  Languages,
   Menu,
   Radar,
   Search,
@@ -11,21 +12,25 @@ import {
   X,
 } from 'lucide-react'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { NavLink, useRouter } from '../router'
+import { supportedLanguages, type AppLanguage } from '../i18n'
 
 const navigation = [
-  { to: '/', label: '总览', icon: LayoutDashboard, end: true },
-  { to: '/recommendations', label: 'AI 推荐', icon: Radar },
-  { to: '/portfolio', label: '我的组合', icon: BriefcaseBusiness },
-  { to: '/assistant', label: 'AI 助手', icon: Bot },
-  { to: '/trading', label: '模拟交易', icon: CandlestickChart },
-  { to: '/image-lab', label: 'Image Lab', icon: FlaskConical },
+  { to: '/', labelKey: 'nav.dashboard', icon: LayoutDashboard, end: true },
+  { to: '/monitor', labelKey: 'nav.monitor', icon: Radar },
+  { to: '/portfolio', labelKey: 'nav.portfolio', icon: BriefcaseBusiness },
+  { to: '/assistant', labelKey: 'nav.assistant', icon: Bot },
+  { to: '/trading', labelKey: 'nav.trading', icon: CandlestickChart },
+  { to: '/image-lab', labelKey: 'nav.imageLab', icon: FlaskConical },
 ]
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false)
   const [symbol, setSymbol] = useState('')
   const { navigate } = useRouter()
+  const { t, i18n } = useTranslation('common')
+  const language = (i18n.resolvedLanguage ?? i18n.language) as AppLanguage
 
   const submitSearch = (event: React.FormEvent) => {
     event.preventDefault()
@@ -42,32 +47,40 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <aside className={`sidebar ${open ? 'sidebar-open' : ''}`}>
         <div className="brand-row">
           <div className="brand-mark"><CandlestickChart size={20} /></div>
-          <div><strong>TradingAI</strong><span>PRO WORKSPACE</span></div>
-          <button className="icon-button mobile-only" onClick={() => setOpen(false)} aria-label="关闭菜单"><X /></button>
+          <div><strong>TradingAI</strong><span>{t('brand.subtitle')}</span></div>
+          <button className="icon-button mobile-only" onClick={() => setOpen(false)} aria-label={t('closeMenu')}><X /></button>
         </div>
-        <div className="paper-badge"><ShieldCheck size={15} /> PAPER MODE · 模拟盘</div>
+        <div className="paper-badge"><ShieldCheck size={15} />{t('paperMode')}</div>
         <nav className="side-nav">
-          {navigation.map(({ to, label, icon: Icon, end }) => (
+          {navigation.map(({ to, labelKey, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end} onClick={() => setOpen(false)}>
-              <Icon size={18} /><span>{label}</span>
+              <Icon size={18} /><span>{t(labelKey)}</span>
             </NavLink>
           ))}
         </nav>
         <div className="sidebar-foot">
-          <span className="status-dot" /> API Gateway
+          <span className="status-dot" /> {t('apiGateway')}
           <small>localhost:8000</small>
         </div>
       </aside>
 
       <div className="workspace">
         <header className="topbar">
-          <button className="icon-button mobile-only" onClick={() => setOpen(true)} aria-label="打开菜单"><Menu /></button>
+          <button className="icon-button mobile-only" onClick={() => setOpen(true)} aria-label={t('openMenu')}><Menu /></button>
           <form className="symbol-search" onSubmit={submitSearch}>
             <Search size={17} />
-            <input value={symbol} onChange={(event) => setSymbol(event.target.value)} placeholder="搜索股票代码，例如 NVDA" />
+            <input value={symbol} onChange={(event) => setSymbol(event.target.value)} placeholder={t('searchPlaceholder')} />
             <kbd>Enter</kbd>
           </form>
-          <div className="market-clock"><span>数据模式</span><strong>DEMO / DELAYED</strong></div>
+          <div className="topbar-tools">
+            <label className="language-select" title={t('language')}>
+              <Languages aria-hidden="true" />
+              <select aria-label={t('language')} value={language} onChange={(event) => void i18n.changeLanguage(event.target.value)}>
+                {supportedLanguages.map((value) => <option key={value} value={value}>{value === 'zh-CN' ? '中文' : value === 'ja' ? '日本語' : 'English'}</option>)}
+              </select>
+            </label>
+            <div className="market-clock"><span>{t('dataMode')}</span><strong>DEMO / DELAYED</strong></div>
+          </div>
         </header>
         <main className="page-content">{children}</main>
       </div>

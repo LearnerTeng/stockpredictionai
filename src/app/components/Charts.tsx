@@ -4,6 +4,7 @@ import { graphic, init, use, type EChartsCoreOption } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { CandlestickSeries, createChart, HistogramSeries, type Time } from 'lightweight-charts'
 import { useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { PerformancePoint, Position, PriceBar, SimulationPoint } from '../types'
 
 use([LineChart, PieChart, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent, CanvasRenderer])
@@ -31,21 +32,22 @@ const baseAxis = {
 }
 
 export function PerformanceChart({ points, valueMode = false }: { points: PerformancePoint[]; valueMode?: boolean }) {
+  const { t } = useTranslation('charts')
   const option: EChartsCoreOption = {
     animationDuration: 700,
     tooltip: { trigger: 'axis', backgroundColor: '#101b2a', borderColor: '#2b4059', textStyle: { color: '#e8f1fb' } },
-    legend: { right: 0, textStyle: { color: '#91a4ba' }, data: valueMode ? ['组合市值'] : ['我的收益', 'SPY 基准'] },
+    legend: { right: 0, textStyle: { color: '#91a4ba' }, data: valueMode ? [t('portfolioValue')] : [t('myReturn'), t('benchmark')] },
     grid: { left: 8, right: 12, top: 42, bottom: 10, containLabel: true },
     xAxis: { ...baseAxis, type: 'category', boundaryGap: false, data: points.map((point) => point.date.slice(5)) },
     yAxis: { ...baseAxis, type: 'value', axisLabel: { ...baseAxis.axisLabel, formatter: valueMode ? '${value}' : '{value}%' } },
     series: valueMode ? [{
-      name: '组合市值', type: 'line', smooth: 0.32, showSymbol: false,
+      name: t('portfolioValue'), type: 'line', smooth: 0.32, showSymbol: false,
       data: points.map((point) => point.portfolio_value),
       lineStyle: { width: 3, color: '#3dd6a6' },
       areaStyle: { color: new graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(61,214,166,.32)' }, { offset: 1, color: 'rgba(61,214,166,0)' }]) },
     }] : [
-      { name: '我的收益', type: 'line', smooth: 0.3, showSymbol: false, data: points.map((point) => point.portfolio_return_pct), lineStyle: { width: 3, color: '#3dd6a6' }, areaStyle: { color: 'rgba(61,214,166,.08)' } },
-      { name: 'SPY 基准', type: 'line', smooth: 0.3, showSymbol: false, data: points.map((point) => point.benchmark_return_pct), lineStyle: { width: 2, color: '#ffbf69', type: 'dashed' } },
+      { name: t('myReturn'), type: 'line', smooth: 0.3, showSymbol: false, data: points.map((point) => point.portfolio_return_pct), lineStyle: { width: 3, color: '#3dd6a6' }, areaStyle: { color: 'rgba(61,214,166,.08)' } },
+      { name: t('benchmark'), type: 'line', smooth: 0.3, showSymbol: false, data: points.map((point) => point.benchmark_return_pct), lineStyle: { width: 2, color: '#ffbf69', type: 'dashed' } },
     ],
   }
   const ref = useEChart(option)
@@ -53,6 +55,7 @@ export function PerformanceChart({ points, valueMode = false }: { points: Perfor
 }
 
 export function AllocationChart({ positions, cash }: { positions: Position[]; cash: number }) {
+  const { t } = useTranslation('charts')
   const option: EChartsCoreOption = {
     tooltip: { trigger: 'item', backgroundColor: '#101b2a', borderColor: '#2b4059', textStyle: { color: '#e8f1fb' } },
     legend: { bottom: 0, textStyle: { color: '#91a4ba' } },
@@ -60,7 +63,7 @@ export function AllocationChart({ positions, cash }: { positions: Position[]; ca
     series: [{
       type: 'pie', radius: ['50%', '72%'], center: ['50%', '43%'], avoidLabelOverlap: true,
       label: { color: '#b8c7d8', formatter: '{b} {d}%' },
-      data: [...positions.map((position) => ({ name: position.symbol, value: position.market_value })), { name: '现金', value: cash }],
+      data: [...positions.map((position) => ({ name: position.symbol, value: position.market_value })), { name: t('cash'), value: cash }],
     }],
   }
   const ref = useEChart(option)
@@ -68,10 +71,11 @@ export function AllocationChart({ positions, cash }: { positions: Position[]; ca
 }
 
 export function SimulationPnlChart({ points }: { points: SimulationPoint[] }) {
+  const { t } = useTranslation('charts')
   const option: EChartsCoreOption = {
     animationDuration: 650,
     tooltip: { trigger: 'axis', backgroundColor: '#101b2a', borderColor: '#2b4059', textStyle: { color: '#e8f1fb' } },
-    legend: { right: 0, textStyle: { color: '#91a4ba' }, data: ['P/L %', 'Position value'] },
+    legend: { right: 0, textStyle: { color: '#91a4ba' }, data: [t('pnl'), t('positionValue')] },
     grid: { left: 8, right: 12, top: 42, bottom: 10, containLabel: true },
     xAxis: { ...baseAxis, type: 'category', boundaryGap: false, data: points.map((point) => point.trade_date.slice(5)) },
     yAxis: [
@@ -80,7 +84,7 @@ export function SimulationPnlChart({ points }: { points: SimulationPoint[] }) {
     ],
     series: [
       {
-        name: 'P/L %',
+        name: t('pnl'),
         type: 'line',
         smooth: 0.3,
         showSymbol: false,
@@ -90,7 +94,7 @@ export function SimulationPnlChart({ points }: { points: SimulationPoint[] }) {
         markLine: { symbol: 'none', lineStyle: { color: '#38546f', type: 'dashed' }, data: [{ yAxis: 0 }] },
       },
       {
-        name: 'Position value',
+        name: t('positionValue'),
         type: 'line',
         yAxisIndex: 1,
         smooth: 0.28,
@@ -105,6 +109,7 @@ export function SimulationPnlChart({ points }: { points: SimulationPoint[] }) {
 }
 
 export function PriceChart({ bars }: { bars: PriceBar[] }) {
+  const { t } = useTranslation('charts')
   const container = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!container.current || !bars.length) return
@@ -131,6 +136,6 @@ export function PriceChart({ bars }: { bars: PriceBar[] }) {
     observer.observe(container.current)
     return () => { observer.disconnect(); chart.remove() }
   }, [bars])
-  if (!bars.length) return <div className="empty-chart"><strong>暂无本地行情</strong><span>先在 Monitor 页面导入该股票的历史数据。</span><a href="/monitor.html">打开 Monitor</a></div>
+  if (!bars.length) return <div className="empty-chart"><strong>{t('noBars')}</strong><span>{t('noBarsHint')}</span><a href="#/monitor">{t('openMonitor')}</a></div>
   return <div ref={container} className="price-chart" />
 }

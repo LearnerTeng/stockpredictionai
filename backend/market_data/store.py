@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "storage" / "market_data.db"
+VALID_MARKETS = {"US", "JP", "HK"}
 
 
 def utc_now_iso() -> str:
@@ -23,6 +24,35 @@ def normalize_symbol(value: str) -> str:
     if len(symbol) > 16:
         raise ValueError("symbol must be 16 characters or fewer")
     return symbol
+
+
+def normalize_market(value: Any) -> str:
+    market = str(value or "US").strip().upper()
+    if market not in VALID_MARKETS:
+        raise ValueError("market must be one of: US, JP, HK")
+    return market
+
+
+def normalize_market_symbol(value: Any, market: Any) -> str:
+    normalized_market = normalize_market(market)
+    raw = normalize_symbol(value)
+    if normalized_market == "JP":
+        return raw if raw.endswith(".T") else f"{raw}.T"
+    if normalized_market == "HK":
+        code = raw[:-3] if raw.endswith(".HK") else raw
+        if code.isdigit():
+            code = code.zfill(4)
+        return f"{code}.HK"
+    return raw
+
+
+def infer_market(symbol: Any) -> str:
+    normalized = normalize_symbol(symbol)
+    if normalized.endswith(".T"):
+        return "JP"
+    if normalized.endswith(".HK"):
+        return "HK"
+    return "US"
 
 
 def normalize_trade_date(value: Any) -> str:
@@ -58,11 +88,13 @@ class MarketDataStore:
                     CREATE TABLE IF NOT EXISTS stock_universe (
                         symbol TEXT PRIMARY KEY,
                         name TEXT,
+                        market TEXT NOT NULL DEFAULT 'US',
                         exchange TEXT,
                         sector TEXT,
                         status TEXT NOT NULL DEFAULT 'candidate',
                         recommendation_score REAL,
                         notes TEXT,
+                        last_refreshed_at TEXT,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
                     );
@@ -105,6 +137,22 @@ class MarketDataStore:
                     ON import_batches(status, created_at DESC);
                     """
                 )
+                columns = {row["name"] for row in conn.execute("PRAGMA table_info(stock_universe)").fetchall()}
+                if "market" not in columns:
+                    conn.execute("ALTER TABLE stock_universe ADD COLUMN market TEXT NOT NULL DEFAULT 'US'")
+                if "last_refreshed_at" not in columns:
+                    conn.execute("ALTER TABLE stock_universe ADD COLUMN last_refreshed_at TEXT")
+                conn.execute(
+                    """
+                    UPDATE stock_universe
+                    SET market = CASE
+                        WHEN symbol LIKE '%.T' THEN 'JP'
+                        WHEN symbol LIKE '%.HK' THEN 'HK'
+                        ELSE 'US'
+                    END
+                    WHERE market IS NULL OR market = '' OR market NOT IN ('US', 'JP', 'HK')
+                    """
+                )
                 conn.commit()
 
     def universe_summary(self) -> dict[str, Any]:
@@ -141,6 +189,7 @@ class MarketDataStore:
                 {
                     "symbol": symbol,
                     "name": str(item.get("name", "") or "").strip() or None,
+                    "market": normalize_market(item.get("market") or infer_market(symbol)),
                     "exchange": str(item.get("exchange", "") or "").strip() or None,
                     "sector": str(item.get("sector", "") or "").strip() or None,
                     "status": str(item.get("status", "candidate") or "candidate").strip().lower(),
@@ -162,20 +211,23 @@ class MarketDataStore:
                     conn.execute(
                         """
                         INSERT INTO stock_universe (
-                            symbol, name, exchange, sector, status, recommendation_score, notes, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            symbol, name, market, exchange, sector, status, recommendation_score,
+                            notes, last_refreshed_at, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
                         ON CONFLICT(symbol) DO UPDATE SET
-                            name = excluded.name,
-                            exchange = excluded.exchange,
-                            sector = excluded.sector,
+                            name = COALESCE(excluded.name, stock_universe.name),
+                            market = excluded.market,
+                            exchange = COALESCE(excluded.exchange, stock_universe.exchange),
+                            sector = COALESCE(excluded.sector, stock_universe.sector),
                             status = excluded.status,
-                            recommendation_score = excluded.recommendation_score,
-                            notes = excluded.notes,
+                            recommendation_score = COALESCE(excluded.recommendation_score, stock_universe.recommendation_score),
+                            notes = COALESCE(excluded.notes, stock_universe.notes),
                             updated_at = excluded.updated_at
                         """,
                         (
                             item["symbol"],
                             item["name"],
+                            item["market"],
                             item["exchange"],
                             item["sector"],
                             item["status"],
@@ -194,7 +246,8 @@ class MarketDataStore:
             with closing(self._connect()) as conn:
                 rows = conn.execute(
                     """
-                    SELECT symbol, name, exchange, sector, status, recommendation_score, notes, created_at, updated_at
+                    SELECT symbol, name, market, exchange, sector, status, recommendation_score,
+                           notes, last_refreshed_at, created_at, updated_at
                     FROM stock_universe
                     ORDER BY
                         CASE status
@@ -207,6 +260,89 @@ class MarketDataStore:
                     """
                 ).fetchall()
 
+        return [dict(row) for row in rows]
+
+    def get_symbol(self, symbol: str) -> dict[str, Any]:
+        normalized = normalize_symbol(symbol)
+        with self._lock:
+            with closing(self._connect()) as conn:
+                row = conn.execute(
+                    """
+                    SELECT symbol, name, market, exchange, sector, status, recommendation_score,
+                           notes, last_refreshed_at, created_at, updated_at
+                    FROM stock_universe WHERE symbol = ?
+                    """,
+                    (normalized,),
+                ).fetchone()
+        if row is None:
+            raise ValueError("symbol not found")
+        return dict(row)
+
+    def update_symbol_metadata(self, symbol: str, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = normalize_symbol(symbol)
+        now = utc_now_iso()
+        allowed = {"name", "market", "exchange", "sector", "notes"}
+        assignments: list[str] = []
+        values: list[Any] = []
+        for key in allowed:
+            if key not in payload:
+                continue
+            value = normalize_market(payload[key]) if key == "market" else str(payload[key] or "").strip() or None
+            assignments.append(f"{key} = ?")
+            values.append(value)
+        if not assignments:
+            raise ValueError("at least one metadata field is required")
+        assignments.append("updated_at = ?")
+        values.extend([now, normalized])
+        with self._lock:
+            with closing(self._connect()) as conn:
+                cursor = conn.execute(
+                    f"UPDATE stock_universe SET {', '.join(assignments)} WHERE symbol = ?",
+                    values,
+                )
+                if cursor.rowcount == 0:
+                    conn.execute(
+                        """
+                        INSERT INTO stock_universe (
+                            symbol, name, market, exchange, sector, status, recommendation_score,
+                            notes, last_refreshed_at, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, 'candidate', NULL, ?, NULL, ?, ?)
+                        """,
+                        (
+                            normalized,
+                            str(payload.get("name", "") or "").strip() or None,
+                            normalize_market(payload.get("market") or infer_market(normalized)),
+                            str(payload.get("exchange", "") or "").strip() or None,
+                            str(payload.get("sector", "") or "").strip() or None,
+                            str(payload.get("notes", "") or "").strip() or None,
+                            now,
+                            now,
+                        ),
+                    )
+                conn.commit()
+        return self.get_symbol(normalized)
+
+    def list_symbol_snapshots(self) -> list[dict[str, Any]]:
+        with self._lock:
+            with closing(self._connect()) as conn:
+                rows = conn.execute(
+                    """
+                    WITH ranked AS (
+                        SELECT symbol, trade_date, close,
+                               ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY trade_date DESC) AS rank
+                        FROM daily_bars
+                    )
+                    SELECT u.symbol, u.name, u.market, u.exchange, u.sector, u.status,
+                           u.recommendation_score, u.notes, u.last_refreshed_at, u.updated_at,
+                           MAX(CASE WHEN r.rank = 1 THEN r.trade_date END) AS latest_trade_date,
+                           MAX(CASE WHEN r.rank = 1 THEN r.close END) AS latest_price,
+                           MAX(CASE WHEN r.rank = 2 THEN r.close END) AS previous_close
+                    FROM stock_universe u
+                    LEFT JOIN ranked r ON r.symbol = u.symbol AND r.rank <= 2
+                    GROUP BY u.symbol
+                    ORDER BY u.symbol
+                    """
+                ).fetchall()
         return [dict(row) for row in rows]
 
     def create_import_batch(self, symbols: list[str], source: str, notes: str | None = None) -> dict[str, Any]:
@@ -310,10 +446,12 @@ class MarketDataStore:
                     conn.execute(
                         """
                         INSERT INTO stock_universe (
-                            symbol, name, exchange, sector, status, recommendation_score, notes, created_at, updated_at
-                        ) VALUES (?, NULL, NULL, NULL, 'active', NULL, 'Auto-created by daily bar ingest', ?, ?)
+                            symbol, name, market, exchange, sector, status, recommendation_score,
+                            notes, last_refreshed_at, created_at, updated_at
+                        ) VALUES (?, NULL, ?, NULL, NULL, 'active', NULL,
+                                  'Auto-created by daily bar ingest', ?, ?, ?)
                         """,
-                        (normalized_symbol, created_at, created_at),
+                        (normalized_symbol, infer_market(normalized_symbol), created_at, created_at, created_at),
                     )
 
                 inserted = 0
@@ -373,6 +511,10 @@ class MarketDataStore:
                                 batch_id,
                             ),
                         )
+                conn.execute(
+                    "UPDATE stock_universe SET status = 'active', last_refreshed_at = ?, updated_at = ? WHERE symbol = ?",
+                    (created_at, created_at, normalized_symbol),
+                )
                 conn.commit()
 
         return {

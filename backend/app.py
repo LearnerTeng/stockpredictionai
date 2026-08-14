@@ -11,6 +11,8 @@ from typing import Any
 from flask import Flask, abort, jsonify, request, send_from_directory
 from flask_cors import CORS
 from market_data.service import store as market_data_store
+from market_data.store import normalize_market, normalize_market_symbol
+from monitoring import MonitorService
 from stock_ai.data import DEFAULT_RANGE_OPTIONS, list_value as stock_list_value
 from stock_ai.features import (
     ema as stock_ema,
@@ -38,8 +40,15 @@ AI_DISCLAIMER = (
     "AI-generated interpretation based only on the current prediction payload and historical tail. "
     "It does not include live news, filings, or broader market context and is not investment advice."
 )
+AI_DISCLAIMERS = {
+    "en": AI_DISCLAIMER,
+    "zh-CN": "AI 解读仅基于当前预测数据和历史尾部数据，不包含实时新闻、公告或更广泛的市场信息，也不构成投资建议。",
+    "ja": "AI による解釈は現在の予測データと直近の履歴データだけに基づきます。リアルタイムのニュース、開示情報、広範な市場情報は含まず、投資助言ではありません。",
+}
+ANALYSIS_LANGUAGE_NAMES = {"en": "English", "zh-CN": "Simplified Chinese", "ja": "Japanese"}
 DEFAULT_OPENAI_MODEL = "gpt-5-mini"
 ALLOWED_ANALYSIS_MODES = {"summary", "full"}
+ALLOWED_ANALYSIS_LANGUAGES = set(ANALYSIS_LANGUAGE_NAMES)
 DEFAULT_IMAGE_SERVICE_BASE_URL = "http://127.0.0.1:8001"
 IMAGE_SERVICE_BASE_URL = os.getenv("IMAGE_SERVICE_BASE_URL", DEFAULT_IMAGE_SERVICE_BASE_URL).rstrip("/")
 IMAGE_STORAGE_ROOT = Path(__file__).with_name("image_service") / "storage"
@@ -57,12 +66,27 @@ class PredictRequest:
 @dataclass
 class AnalyzeRequest:
     analysis_mode: str
+    language: str
     prediction: dict[str, Any]
 
 
 DEFAULT_MONITOR_SYMBOLS = ["AAPL", "MSFT", "NVDA", "GS", "SPY"]
 YAHOO_RANGE_OPTIONS = DEFAULT_RANGE_OPTIONS
 stock_ai_pipeline = StockAiPipeline()
+
+MONITOR_FILTER_KEYS = {
+    "q", "view", "market", "sector", "exchange", "price_min", "price_max",
+    "score_min", "score_max", "forecast_direction", "freshness", "sort", "order",
+    "page", "page_size",
+}
+
+
+def _monitor_service() -> MonitorService:
+    return MonitorService(market_data_store, trading_store)
+
+
+def _monitor_filters(source: Any) -> dict[str, Any]:
+    return {key: source.get(key) for key in MONITOR_FILTER_KEYS if source.get(key) is not None}
 
 
 def _image_service_url(path: str) -> str:
@@ -191,6 +215,10 @@ def _parse_analysis_request(payload: dict[str, Any]) -> AnalyzeRequest:
     if analysis_mode not in ALLOWED_ANALYSIS_MODES:
         raise ValueError("analysis_mode must be one of: summary, full")
 
+    language = str(payload.get("language", "en")).strip()
+    if language not in ALLOWED_ANALYSIS_LANGUAGES:
+        raise ValueError("language must be one of: zh-CN, en, ja")
+
     prediction = payload.get("prediction")
     if not isinstance(prediction, dict):
         raise ValueError("prediction payload is required")
@@ -230,6 +258,7 @@ def _parse_analysis_request(payload: dict[str, Any]) -> AnalyzeRequest:
 
     return AnalyzeRequest(
         analysis_mode=analysis_mode,
+        language=language,
         prediction=normalized_prediction,
     )
 
@@ -391,6 +420,136 @@ def data_import_yahoo() -> tuple[Any, int]:
                 errors.append({"symbol": normalized_symbol, "error": str(err)})
 
         return jsonify({"batch": market_data_store.get_import_batch(batch["id"]), "imported": imported, "errors": errors}), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+
+
+@app.get("/monitor/stocks")
+def monitor_stocks() -> tuple[Any, int]:
+    try:
+        return jsonify(_monitor_service().query(_monitor_filters(request.args))), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+
+
+@app.post("/monitor/stocks")
+def monitor_add_stock() -> tuple[Any, int]:
+    try:
+        payload = _require_json_object()
+        market = normalize_market(payload.get("market"))
+        symbol = normalize_market_symbol(payload.get("symbol"), market)
+        metadata = {
+            "symbol": symbol,
+            "market": market,
+            "name": str(payload.get("name", "") or "").strip() or None,
+            "exchange": str(payload.get("exchange", "") or "").strip() or None,
+            "sector": str(payload.get("sector", "") or "").strip() or None,
+            "status": "active",
+        }
+        metadata_warning = None
+        try:
+            remote_metadata = stock_ai_pipeline.market_data.fetch_metadata(symbol)
+            metadata["name"] = metadata["name"] or remote_metadata.get("name")
+            metadata["exchange"] = metadata["exchange"] or remote_metadata.get("exchange")
+        except Exception as err:  # noqa: BLE001
+            metadata_warning = str(err)
+
+        market_data_store.upsert_symbols([metadata])
+        refresh_error = None
+        try:
+            bars = _fetch_yahoo_bars(symbol, str(payload.get("range", "1y") or "1y"))
+            market_data_store.ingest_daily_bars(symbol, bars, source="monitor-add")
+            trading_store.upsert_monitor_signals([_build_monitor_signal(symbol, bars)])
+        except Exception as err:  # noqa: BLE001
+            refresh_error = str(err)
+
+        return jsonify(
+            {
+                "item": _monitor_service().detail(symbol),
+                "warnings": [message for message in (metadata_warning, refresh_error) if message],
+            }
+        ), 201
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+
+
+@app.get("/monitor/stocks/<symbol>")
+def monitor_stock_detail(symbol: str) -> tuple[Any, int]:
+    try:
+        return jsonify(_monitor_service().detail(symbol)), 200
+    except ValueError as err:
+        status = 404 if "not found" in str(err) else 400
+        return jsonify({"error": str(err)}), status
+
+
+@app.patch("/monitor/stocks/<symbol>")
+def monitor_update_stock(symbol: str) -> tuple[Any, int]:
+    try:
+        payload = _require_json_object()
+        market_data_store.update_symbol_metadata(symbol, payload)
+        return jsonify(_monitor_service().detail(symbol)), 200
+    except ValueError as err:
+        status = 404 if "not found" in str(err) else 400
+        return jsonify({"error": str(err)}), status
+
+
+@app.patch("/monitor/stocks/<symbol>/preference")
+def monitor_update_preference(symbol: str) -> tuple[Any, int]:
+    try:
+        payload = _require_json_object()
+        if "wanted" not in payload or not isinstance(payload["wanted"], bool):
+            raise ValueError("wanted must be a boolean")
+        trading_store.set_wanted(symbol, payload["wanted"])
+        return jsonify(_monitor_service().detail(symbol)), 200
+    except ValueError as err:
+        status = 404 if "not found" in str(err) else 400
+        return jsonify({"error": str(err)}), status
+
+
+@app.get("/monitor/settings")
+def monitor_get_settings() -> tuple[Any, int]:
+    return jsonify(trading_store.get_monitor_settings()), 200
+
+
+@app.put("/monitor/settings")
+def monitor_put_settings() -> tuple[Any, int]:
+    try:
+        return jsonify(trading_store.update_monitor_settings(_require_json_object())), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+
+
+@app.post("/monitor/refresh")
+def monitor_refresh() -> tuple[Any, int]:
+    try:
+        payload = _require_json_object()
+        filters_payload = payload.get("filters") or {}
+        if not isinstance(filters_payload, dict):
+            raise ValueError("filters must be an object")
+        filters = _monitor_filters(filters_payload)
+        symbols = _monitor_service().matching_symbols(filters)
+        range_value = str(payload.get("range", "1y") or "1y")
+        refreshed: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        for symbol in symbols:
+            try:
+                bars = _fetch_yahoo_bars(symbol, range_value)
+                market_data_store.ingest_daily_bars(symbol, bars, source="monitor-refresh")
+                signal = _build_monitor_signal(symbol, bars)
+                trading_store.upsert_monitor_signals([signal])
+                refreshed.append({"symbol": symbol, "bars": len(bars), "score": signal.get("score")})
+            except Exception as err:  # noqa: BLE001
+                errors.append({"symbol": symbol, "error": str(err)})
+
+        return jsonify(
+            {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "filters": filters,
+                "refreshed": refreshed,
+                "errors": errors,
+                "items": _monitor_service().query(filters)["items"],
+            }
+        ), 200
     except ValueError as err:
         return jsonify({"error": str(err)}), 400
 
@@ -613,12 +772,14 @@ def _build_analysis_prompt(req: AnalyzeRequest) -> tuple[str, str]:
         "Do not claim access to live prices, market news, earnings, macro events, or external data. "
         "Do not give direct buy or sell recommendations. "
         "Focus on interpreting the model output, forecast shape, errors, uncertainty cues, and operational cautions. "
+        f"Write every user-facing field exclusively in {ANALYSIS_LANGUAGE_NAMES[req.language]}. "
         f"{mode_instruction}"
     )
 
     user_prompt = (
         "Interpret the following prediction payload and return structured analysis.\n\n"
         f"analysis_mode: {req.analysis_mode}\n"
+        f"output_language: {req.language}\n"
         f"symbol: {prediction['symbol']}\n"
         f"history_window: {prediction['history_window']}\n"
         f"forecast_steps: {prediction['forecast_steps']}\n"
@@ -682,47 +843,70 @@ def _build_local_analysis(req: AnalyzeRequest) -> dict[str, Any]:
     avg_forecast = mean(forecasts)
     delta = avg_forecast - last_close
     delta_pct = (delta / last_close * 100) if last_close else 0.0
-    direction = "upward" if delta > 0 else "downward" if delta < 0 else "flat"
+    direction_key = "upward" if delta > 0 else "downward" if delta < 0 else "flat"
     spread = max(forecasts) - min(forecasts) if len(forecasts) > 1 else 0.0
     realized_bias = mean(pred - actual for pred, actual in zip(forecasts, actuals))
 
-    sections = [
-        {
-            "heading": "Forecast Shape",
-            "bullets": [
+    directions = {
+        "en": {"upward": "upward", "downward": "downward", "flat": "flat"},
+        "zh-CN": {"upward": "上行", "downward": "下行", "flat": "横盘"},
+        "ja": {"upward": "上向き", "downward": "下向き", "flat": "横ばい"},
+    }
+    direction = directions[req.language][direction_key]
+
+    if req.language == "zh-CN":
+        sections = [
+            {"heading": "预测形态", "bullets": [
+                f"短期路径呈{direction}趋势，预测均值较最近收盘价变动 {delta_pct:.2f}%。",
+                f"预测值介于 {min(forecasts):.2f} 至 {max(forecasts):.2f}，区间宽度为 {spread:.2f}。",
+            ]},
+            {"heading": "误差读数", "bullets": [
+                f"留出回测误差为 MAE {metrics['mae']:.4f}、RMSE {metrics['rmse']:.4f}。",
+                f"预测相对实际值的平均偏差为 {realized_bias:.4f}；正值表示模型平均预测偏高。",
+            ]},
+        ]
+        title = f"{prediction['symbol']} 短期预测偏向{direction}"
+        summary = f"预测均值为 {avg_forecast:.2f}，最近收盘价为 {last_close:.2f}；评估窗口内 MAE 为 {metrics['mae']:.4f}，RMSE 为 {metrics['rmse']:.4f}。"
+        cautions = {"heading": "操作注意事项", "bullets": ["当前环境使用轻量统计预测，以便在不依赖大型原生组件的情况下运行。", "应将结果视为方向性研究支持，而不是投资指令，也不能替代更广泛的市场信息。"]}
+    elif req.language == "ja":
+        sections = [
+            {"heading": "予測形状", "bullets": [
+                f"短期経路は{direction}で、予測平均は直近終値に対して {delta_pct:.2f}% の変化です。",
+                f"予測値は {min(forecasts):.2f} から {max(forecasts):.2f} の範囲で、幅は {spread:.2f} です。",
+            ]},
+            {"heading": "誤差指標", "bullets": [
+                f"ホールドアウト検証の誤差は MAE {metrics['mae']:.4f}、RMSE {metrics['rmse']:.4f} です。",
+                f"実績に対する平均予測バイアスは {realized_bias:.4f} です。正の値は平均的な過大予測を示します。",
+            ]},
+        ]
+        title = f"{prediction['symbol']} の短期予測は{direction}"
+        summary = f"予測平均は {avg_forecast:.2f}、直近終値は {last_close:.2f} です。評価期間の MAE は {metrics['mae']:.4f}、RMSE は {metrics['rmse']:.4f} です。"
+        cautions = {"heading": "運用上の注意", "bullets": ["この環境では、大規模なネイティブ依存なしで動作する軽量な統計予測を使用しています。", "出力は方向性を検討する材料であり、投資指示や広範な市場情報の代替ではありません。"]}
+    else:
+        sections = [
+            {"heading": "Forecast Shape", "bullets": [
                 f"The near-term path is {direction}, with an average projected move of {delta_pct:.2f}% versus the latest close.",
                 f"Projected values span {min(forecasts):.2f} to {max(forecasts):.2f}, creating a forecast spread of {spread:.2f}.",
-            ],
-        },
-        {
-            "heading": "Error Readout",
-            "bullets": [
+            ]},
+            {"heading": "Error Readout", "bullets": [
                 f"Held-out backtest error is MAE {metrics['mae']:.4f} and RMSE {metrics['rmse']:.4f}.",
                 f"Average forecast bias versus actuals is {realized_bias:.4f}; positive means the model overshot on average.",
-            ],
-        },
-    ]
+            ]},
+        ]
+        title = f"{prediction['symbol']} forecast shows a {direction} near-term bias"
+        summary = f"The forecast average is {avg_forecast:.2f} versus the latest close of {last_close:.2f}, with MAE {metrics['mae']:.4f} and RMSE {metrics['rmse']:.4f} over the evaluation window."
+        cautions = {"heading": "Operational Cautions", "bullets": ["This environment uses a lightweight statistical forecast so the demo can run without heavy native dependencies.", "Treat the output as directional support, not an investment instruction or a substitute for broader market context."]}
 
     if req.analysis_mode == "full":
-        sections.append(
-            {
-                "heading": "Operational Cautions",
-                "bullets": [
-                    "This environment is using a lightweight statistical forecast so the demo can run without heavy native dependencies.",
-                    "Treat the output as directional support, not an investment instruction or a substitute for broader market context.",
-                ],
-            }
-        )
+        sections.append(cautions)
 
     return {
         "analysis_mode": req.analysis_mode,
-        "title": f"{prediction['symbol']} forecast shows a {direction} near-term bias",
-        "summary": (
-            f"The forecast average is {avg_forecast:.2f} versus the latest close of {last_close:.2f}, "
-            f"with MAE {metrics['mae']:.4f} and RMSE {metrics['rmse']:.4f} over the evaluation window."
-        ),
+        "language": req.language,
+        "title": title,
+        "summary": summary,
         "sections": sections,
-        "disclaimer": AI_DISCLAIMER,
+        "disclaimer": AI_DISCLAIMERS[req.language],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -769,10 +953,11 @@ def _generate_ai_analysis(req: AnalyzeRequest) -> dict[str, Any]:
 
     return {
         "analysis_mode": req.analysis_mode,
+        "language": req.language,
         "title": parsed["title"],
         "summary": parsed["summary"],
         "sections": parsed["sections"],
-        "disclaimer": AI_DISCLAIMER,
+        "disclaimer": AI_DISCLAIMERS[req.language],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 

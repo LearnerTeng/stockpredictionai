@@ -707,3 +707,18 @@ try {
   console.error(error)
   renderCrash(error)
 }
+    statusEl.textContent = `预测完成：${data.symbol}，未来 ${data.forecast_steps} 天。`
+    metricsEl.innerHTML = `
+      <article><h3>MAE</h3><p>${data.metrics.mae}</p></article>
+      <article><h3>RMSE</h3><p>${data.metrics.rmse}</p></article>
+    `
+    metricsEl.classList.remove('hidden')
+
+    drawChart(data.historical_tail, data.predictions)
+    chartPanel.classList.remove('hidden')
+  } catch (error) {
+    statusEl.textContent = `预测失败：${error.message}`
+  } finally {
+    submitBtn.disabled = false
+  }
+})

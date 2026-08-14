@@ -115,12 +115,16 @@ export interface PredictionResult {
 }
 
 export interface AnalysisResult {
+  analysis_mode: 'summary' | 'full'
+  language: UiLanguage
   title: string
   summary: string
   sections: Array<{ heading: string; bullets: string[] }>
   disclaimer: string
   generated_at: string
 }
+
+export type UiLanguage = 'zh-CN' | 'en' | 'ja'
 
 export interface SimulationPoint {
   trade_date: string
@@ -165,4 +169,60 @@ export interface PositionSimulation {
     forecast_steps: number
   }
   disclaimer: string
+}
+
+export type MarketCode = 'US' | 'JP' | 'HK'
+export type MonitorStatus = 'holding' | 'wanted' | 'ai_suggested' | 'monitoring'
+export type MonitorView = 'all' | 'wanted' | 'holding' | 'ai'
+
+export interface MonitorStock {
+  symbol: string
+  name: string
+  market: MarketCode
+  exchange: string | null
+  sector: string | null
+  statuses: MonitorStatus[]
+  wanted: boolean
+  latest_price: number | null
+  day_change_pct: number | null
+  ai_score: number | null
+  projected_return_pct: number | null
+  market_value: number | null
+  holding_pnl_pct: number | null
+  latest_trade_date: string | null
+  last_refreshed_at: string | null
+  updated_at: string | null
+  holding: Position | null
+  recommendation: Recommendation | null
+}
+
+export interface MonitorFacets {
+  markets: Record<string, number>
+  statuses: Record<MonitorView, number>
+  sectors: Record<string, number>
+  exchanges: Record<string, number>
+}
+
+export interface MonitorStocksResponse {
+  items: MonitorStock[]
+  total: number
+  page: number
+  page_size: number
+  pages: number
+  facets: MonitorFacets
+  generated_at: string
+  data_mode: string
+}
+
+export interface MonitorSettings {
+  auto_refresh_enabled: boolean
+  interval_minutes: number
+  updated_at: string | null
+}
+
+export interface MonitorRefreshResult {
+  generated_at: string
+  refreshed: Array<{ symbol: string; bars: number; score: number | null }>
+  errors: Array<{ symbol: string; error: string }>
+  items: MonitorStock[]
 }

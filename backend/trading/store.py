@@ -110,6 +110,19 @@ class TradingStore:
                         FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
                     );
 
+                    CREATE TABLE IF NOT EXISTS stock_preferences (
+                        symbol TEXT PRIMARY KEY,
+                        wanted INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+
+                    CREATE TABLE IF NOT EXISTS app_settings (
+                        key TEXT PRIMARY KEY,
+                        value_json TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+
                     CREATE INDEX IF NOT EXISTS idx_paper_orders_created
                     ON paper_orders(created_at DESC);
                     """
@@ -186,6 +199,80 @@ class TradingStore:
             with closing(self._connect()) as conn:
                 rows = conn.execute("SELECT * FROM recommendations ORDER BY score DESC, symbol").fetchall()
         return [self._serialize_recommendation(row) for row in rows]
+
+    def get_recommendation_or_none(self, symbol: str) -> dict[str, Any] | None:
+        with self._lock:
+            with closing(self._connect()) as conn:
+                row = conn.execute(
+                    "SELECT * FROM recommendations WHERE symbol = ?", (normalize_symbol(symbol),)
+                ).fetchone()
+        return self._serialize_recommendation(row) if row is not None else None
+
+    def list_wanted_symbols(self) -> set[str]:
+        with self._lock:
+            with closing(self._connect()) as conn:
+                rows = conn.execute("SELECT symbol FROM stock_preferences WHERE wanted = 1").fetchall()
+        return {str(row["symbol"]) for row in rows}
+
+    def set_wanted(self, symbol: str, wanted: bool) -> dict[str, Any]:
+        normalized = normalize_symbol(symbol)
+        now = utc_now_iso()
+        with self._lock:
+            with closing(self._connect()) as conn:
+                existing = conn.execute(
+                    "SELECT created_at FROM stock_preferences WHERE symbol = ?", (normalized,)
+                ).fetchone()
+                created_at = existing["created_at"] if existing is not None else now
+                conn.execute(
+                    """
+                    INSERT INTO stock_preferences (symbol, wanted, created_at, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(symbol) DO UPDATE SET wanted = excluded.wanted, updated_at = excluded.updated_at
+                    """,
+                    (normalized, 1 if wanted else 0, created_at, now),
+                )
+                conn.commit()
+        return {"symbol": normalized, "wanted": bool(wanted), "updated_at": now}
+
+    def get_monitor_settings(self) -> dict[str, Any]:
+        defaults = {"auto_refresh_enabled": False, "interval_minutes": 15}
+        with self._lock:
+            with closing(self._connect()) as conn:
+                row = conn.execute("SELECT value_json, updated_at FROM app_settings WHERE key = 'monitor'").fetchone()
+        if row is None:
+            return {**defaults, "updated_at": None}
+        try:
+            stored = json.loads(row["value_json"])
+        except (TypeError, json.JSONDecodeError):
+            stored = {}
+        return {
+            "auto_refresh_enabled": bool(stored.get("auto_refresh_enabled", defaults["auto_refresh_enabled"])),
+            "interval_minutes": int(stored.get("interval_minutes", defaults["interval_minutes"])),
+            "updated_at": row["updated_at"],
+        }
+
+    def update_monitor_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        current = self.get_monitor_settings()
+        enabled = bool(payload.get("auto_refresh_enabled", current["auto_refresh_enabled"]))
+        try:
+            interval = int(payload.get("interval_minutes", current["interval_minutes"]))
+        except (TypeError, ValueError) as err:
+            raise ValueError("interval_minutes must be an integer") from err
+        if interval < 1 or interval > 1440:
+            raise ValueError("interval_minutes must be between 1 and 1440")
+        now = utc_now_iso()
+        value = {"auto_refresh_enabled": enabled, "interval_minutes": interval}
+        with self._lock:
+            with closing(self._connect()) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO app_settings (key, value_json, updated_at) VALUES ('monitor', ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+                    """,
+                    (json.dumps(value), now),
+                )
+                conn.commit()
+        return {**value, "updated_at": now}
 
     def upsert_monitor_signals(self, signals: list[dict[str, Any]]) -> None:
         if not signals:

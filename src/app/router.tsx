@@ -2,28 +2,31 @@ import { createContext, type AnchorHTMLAttributes, type ReactNode, useContext, u
 
 interface RouterValue {
   path: string
+  location: string
+  searchParams: URLSearchParams
   navigate: (path: string) => void
 }
 
 const RouterContext = createContext<RouterValue | null>(null)
 
-function readPath() {
+function readLocation() {
   const value = window.location.hash.replace(/^#/, '') || '/'
   return value.startsWith('/') ? value : `/${value}`
 }
 
 export function RouterProvider({ children }: { children: ReactNode }) {
-  const [path, setPath] = useState(readPath)
+  const [location, setLocation] = useState(readLocation)
   useEffect(() => {
-    const update = () => setPath(readPath())
+    const update = () => setLocation(readLocation())
     window.addEventListener('hashchange', update)
     return () => window.removeEventListener('hashchange', update)
   }, [])
   const navigate = (target: string) => {
     const normalized = target.startsWith('/') ? target : `/${target}`
-    if (readPath() !== normalized) window.location.hash = normalized
+    if (readLocation() !== normalized) window.location.hash = normalized
   }
-  return <RouterContext.Provider value={{ path, navigate }}>{children}</RouterContext.Provider>
+  const [path, search = ''] = location.split('?', 2)
+  return <RouterContext.Provider value={{ path, location, searchParams: new URLSearchParams(search), navigate }}>{children}</RouterContext.Provider>
 }
 
 export function useRouter() {

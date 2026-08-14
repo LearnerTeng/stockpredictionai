@@ -122,6 +122,17 @@ class YahooFinanceDataProvider:
             raise RuntimeError(f"No daily bars returned for symbol {normalized_symbol}")
         return bars
 
+    def fetch_metadata(self, symbol: str) -> dict[str, Any]:
+        normalized_symbol = normalize_symbol(symbol)
+        payload = self._fetch_chart_payload(normalized_symbol, "1mo")
+        result = (payload.get("chart", {}).get("result") or [{}])[0]
+        meta = result.get("meta") or {}
+        return {
+            "symbol": normalized_symbol,
+            "name": str(meta.get("longName") or meta.get("shortName") or "").strip() or None,
+            "exchange": str(meta.get("fullExchangeName") or meta.get("exchangeName") or "").strip() or None,
+        }
+
     def _fetch_chart_payload(self, symbol: str, range_value: str) -> dict[str, Any]:
         normalized_symbol = normalize_symbol(symbol)
         endpoint = (
