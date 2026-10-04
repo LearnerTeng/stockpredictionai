@@ -8,6 +8,7 @@ import sqlite3
 from threading import Lock
 from typing import Any
 from uuid import uuid4
+from .policy import parse_order, same_request, reference_price, evaluate_order, validate_confirmation, record_event
 
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "storage" / "trading.db"
@@ -348,6 +349,22 @@ class TradingStore:
             raise ValueError("recommendation not found")
         return self._serialize_recommendation(row)
 
+    def list_portfolios(self) -> list[dict[str, Any]]:
+        with self._lock:
+            with closing(self._connect()) as conn:
+                rows = conn.execute("SELECT * FROM portfolios ORDER BY name, id").fetchall()
+        return [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "mode": row["mode"],
+                "currency": "USD",
+                "account_type": "paper",
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
     def get_portfolio(self, portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict[str, Any]:
         with self._lock:
             with closing(self._connect()) as conn:
@@ -372,9 +389,13 @@ class TradingStore:
                 {
                     "symbol": row["symbol"],
                     "name": row["name"],
+                    "currency": "USD",
+                    "account_bucket": None,
                     "quantity": row["quantity"],
                     "average_cost": row["average_cost"],
                     "last_price": row["last_price"],
+                    "price_scale": 1,
+                    "source": None,
                     "market_value": round(value, 2),
                     "unrealized_pnl": round(pnl, 2),
                     "unrealized_pnl_pct": round(pnl / cost * 100, 2) if cost else 0.0,
@@ -390,6 +411,8 @@ class TradingStore:
             "id": portfolio["id"],
             "name": portfolio["name"],
             "mode": portfolio["mode"],
+            "currency": "USD",
+            "account_type": "paper",
             "cash": round(cash, 2),
             "market_value": round(market_value, 2),
             "equity": round(equity, 2),
@@ -454,85 +477,83 @@ class TradingStore:
                 ).fetchall()
         return [self._serialize_order(row) for row in rows]
 
+    def _order_context(self, conn):
+        portfolio = dict(conn.execute("SELECT * FROM portfolios WHERE id = ?", (DEFAULT_PORTFOLIO_ID,)).fetchone())
+        positions = [dict(row) for row in conn.execute("SELECT * FROM positions WHERE portfolio_id = ?", (DEFAULT_PORTFOLIO_ID,))]
+        pending = [dict(row) for row in conn.execute("SELECT * FROM paper_orders WHERE portfolio_id = ? AND status = 'awaiting_confirmation'", (DEFAULT_PORTFOLIO_ID,))]
+        setting = conn.execute("SELECT value_json FROM app_settings WHERE key = 'trading_halt'").fetchone()
+        halted = bool(json.loads(setting[0]).get("halted")) if setting else False
+        return portfolio, positions, pending, halted
+
+    def get_trading_control(self):
+        with closing(self._connect()) as conn:
+            row = conn.execute("SELECT value_json FROM app_settings WHERE key = 'trading_halt'").fetchone()
+        return json.loads(row[0]) if row else {"halted": False}
+
+    def set_trading_halted(self, halted: bool):
+        if not isinstance(halted, bool):
+            raise ValueError("halted must be a boolean")
+        value = {"halted": halted, "updated_at": utc_now_iso()}
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("INSERT INTO app_settings VALUES ('trading_halt', ?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at", (json.dumps(value), value["updated_at"]))
+            conn.commit()
+        return value
+
     def create_order(self, payload: dict[str, Any], client_order_id: str | None = None) -> dict[str, Any]:
-        symbol = normalize_symbol(payload.get("symbol"))
-        side = str(payload.get("side", "")).strip().lower()
-        if side not in {"buy", "sell"}:
-            raise ValueError("side must be buy or sell")
-        try:
-            quantity = float(payload.get("quantity"))
-        except (TypeError, ValueError) as err:
-            raise ValueError("quantity must be a number") from err
-        if quantity <= 0 or quantity > 10_000:
-            raise ValueError("quantity must be greater than 0 and no more than 10000")
-        order_type = str(payload.get("order_type", "market")).strip().lower()
-        if order_type not in {"market", "limit"}:
-            raise ValueError("order_type must be market or limit")
-        limit_price = float(payload["limit_price"]) if payload.get("limit_price") is not None else None
-        if order_type == "limit" and (limit_price is None or limit_price <= 0):
-            raise ValueError("limit_price is required for a limit order")
-
-        portfolio = self.get_portfolio()
-        positions = {item["symbol"]: item for item in portfolio["positions"]}
-        try:
-            recommendation = self.get_recommendation(symbol)
-        except ValueError:
-            recommendation = None
-        estimated_price = limit_price or (
-            positions.get(symbol, {}).get("last_price")
-            or (recommendation or {}).get("latest_price")
-        )
-        if not estimated_price:
-            raise ValueError("no reference price is available for this symbol")
-        notional = quantity * float(estimated_price)
-
-        checks = []
-        checks.append({"code": "paper_only", "passed": portfolio["mode"] == "paper", "message": "Only paper trading is enabled."})
-        checks.append({"code": "max_order_notional", "passed": notional <= 10_000, "message": "Order notional must not exceed $10,000."})
-        if side == "buy":
-            checks.append({"code": "available_cash", "passed": notional <= portfolio["cash"], "message": "Sufficient cash is required."})
-            projected_position = positions.get(symbol, {}).get("market_value", 0) + notional
-            checks.append({"code": "position_limit", "passed": projected_position <= portfolio["equity"] * 0.25, "message": "Projected position must not exceed 25% of equity."})
-        else:
-            checks.append({"code": "available_quantity", "passed": quantity <= positions.get(symbol, {}).get("quantity", 0), "message": "Sell quantity cannot exceed the current position."})
-        approved = all(check["passed"] for check in checks)
-        risk_result = {"approved": approved, "checks": checks, "policy_version": "paper-v1"}
-
-        order_id = uuid4().hex
-        normalized_client_id = str(client_order_id or payload.get("client_order_id") or uuid4().hex)
+        order = parse_order(payload)
+        client_id = str(client_order_id or payload.get("client_order_id") or uuid4().hex)
         now = utc_now_iso()
-        with self._lock:
-            with closing(self._connect()) as conn:
-                existing = conn.execute(
-                    "SELECT * FROM paper_orders WHERE client_order_id = ?", (normalized_client_id,)
-                ).fetchone()
-                if existing is not None:
-                    return self._serialize_order(existing)
-                conn.execute(
-                    """
-                    INSERT INTO paper_orders (
-                        id, client_order_id, portfolio_id, symbol, side, quantity,
-                        order_type, limit_price, estimated_price, estimated_notional,
-                        status, risk_result_json, filled_price, error_message,
-                        created_at, updated_at, confirmed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL)
-                    """,
-                    (order_id, normalized_client_id, DEFAULT_PORTFOLIO_ID, symbol, side, quantity,
-                     order_type, limit_price, estimated_price, notional,
-                     "awaiting_confirmation" if approved else "risk_rejected",
-                     json.dumps(risk_result), now, now),
-                )
-                conn.commit()
-                row = conn.execute("SELECT * FROM paper_orders WHERE id = ?", (order_id,)).fetchone()
-        return self._serialize_order(row)
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute("SELECT * FROM paper_orders WHERE client_order_id = ?", (client_id,)).fetchone()
+            if existing is not None:
+                same_request(existing, order)
+                return self._serialize_order(existing)
+            portfolio, positions, pending, halted = self._order_context(conn)
+            recommendation = conn.execute("SELECT * FROM recommendations WHERE symbol = ?", (order["symbol"],)).fetchone()
+            price = reference_price(order["symbol"], positions, dict(recommendation) if recommendation else None)
+            estimated_price = order["limit_price"] if order["order_type"] == "limit" else price
+            risk = evaluate_order(order, estimated_price, portfolio, positions, pending, halted)
+            status = "awaiting_confirmation" if risk["approved"] else "risk_rejected"
+            record_event(risk, status, now)
+            order_id = uuid4().hex
+            conn.execute("""
+                INSERT INTO paper_orders (id, client_order_id, portfolio_id, symbol, side, quantity,
+                    order_type, limit_price, estimated_price, estimated_notional, status, risk_result_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (order_id, client_id, DEFAULT_PORTFOLIO_ID, order["symbol"], order["side"], order["quantity"],
+                  order["order_type"], order["limit_price"], estimated_price, estimated_price * order["quantity"],
+                  status, json.dumps(risk), now, now))
+            conn.commit()
+            return self._serialize_order(conn.execute("SELECT * FROM paper_orders WHERE id = ?", (order_id,)).fetchone())
+
+    def cancel_order(self, order_id: str):
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM paper_orders WHERE id = ?", (order_id,)).fetchone()
+            if row is None:
+                raise ValueError("order not found")
+            if row["status"] == "cancelled":
+                return self._serialize_order(row)
+            if row["status"] != "awaiting_confirmation":
+                raise ValueError("only pending orders can be cancelled")
+            now = utc_now_iso()
+            risk = record_event(json.loads(row["risk_result_json"]), "cancelled", now)
+            conn.execute("UPDATE paper_orders SET status = 'cancelled', updated_at = ?, risk_result_json = ? WHERE id = ?", (now, json.dumps(risk), order_id))
+            conn.commit()
+            return self._serialize_order(conn.execute("SELECT * FROM paper_orders WHERE id = ?", (order_id,)).fetchone())
 
     def confirm_order(self, order_id: str) -> dict[str, Any]:
         now = utc_now_iso()
         with self._lock:
             with closing(self._connect()) as conn:
+                conn.execute("BEGIN IMMEDIATE")
                 order = conn.execute("SELECT * FROM paper_orders WHERE id = ?", (order_id,)).fetchone()
                 if order is None:
                     raise ValueError("order not found")
+                if order["status"] == "paper_filled":
+                    return self._serialize_order(order)
                 if order["status"] != "awaiting_confirmation":
                     raise ValueError(f"order cannot be confirmed from status {order['status']}")
 
@@ -541,7 +562,15 @@ class TradingStore:
                     "SELECT * FROM positions WHERE portfolio_id = ? AND symbol = ?",
                     (order["portfolio_id"], order["symbol"]),
                 ).fetchone()
-                price = float(order["estimated_price"])
+                context, positions, pending, halted = self._order_context(conn)
+                recommendation = conn.execute("SELECT * FROM recommendations WHERE symbol = ?", (order["symbol"],)).fetchone()
+                price = reference_price(order["symbol"], positions, dict(recommendation) if recommendation else None)
+                pending = [item for item in pending if item["id"] != order_id]
+                risk = evaluate_order(order, price, context, positions, pending, halted)
+                validate_confirmation(order, price, risk)
+                risk["events"] = json.loads(order["risk_result_json"]).get("events", [])
+                record_event(risk, "paper_filled", now)
+                conn.execute("UPDATE paper_orders SET risk_result_json = ? WHERE id = ?", (json.dumps(risk), order_id))
                 notional = price * float(order["quantity"])
                 if order["side"] == "buy":
                     if notional > portfolio["cash"]:

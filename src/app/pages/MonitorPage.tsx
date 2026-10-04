@@ -253,7 +253,7 @@ export function MonitorPage() {
         <div className="monitor-result-head"><div><strong>{t('monitor:resultCount', { count: data?.total ?? 0 })}</strong></div>{query.isFetching && <span className="querying"><RefreshCw className="spin" />{t('monitor:reading')}</span>}</div>
         <div className="table-wrap">
           <table className="monitor-table">
-            <thead><tr><th>{t('monitor:table.stock')}</th><th>{t('monitor:table.marketStatus')}</th><th><SortHeader field="latest_price" label={t('monitor:table.latestPrice')} currentSort={sort} currentOrder={order} onSort={handleSort} /></th><th><SortHeader field="day_change_pct" label={t('monitor:table.dayChange')} currentSort={sort} currentOrder={order} onSort={handleSort} /></th><th><SortHeader field="ai_score" label={t('monitor:table.aiScore')} currentSort={sort} currentOrder={order} onSort={handleSort} /></th><th><SortHeader field="projected_return_pct" label={t('monitor:table.projectedReturn')} currentSort={sort} currentOrder={order} onSort={handleSort} /></th><th><SortHeader field="holding_pnl_pct" label={t('monitor:table.holdingPnl')} currentSort={sort} currentOrder={order} onSort={handleSort} /></th><th>{t('monitor:table.quoteUpdated')}</th><th>{t('monitor:table.actions')}</th></tr></thead>
+            <thead><tr><th>{t('monitor:table.stock')}</th><th>{t('monitor:table.marketStatus')}</th><th><SortHeader field="latest_price" label={t('monitor:table.latestPrice')} currentSort={sort} currentOrder={order} onSort={handleSort} /></th><th><SortHeader field="day_change_pct" label={t('monitor:table.dayChange')} currentSort={sort} currentOrder={order} onSort={handleSort} /></th><th><SortHeader field="ai_score" label={t('monitor:table.aiScore')} currentSort={sort} currentOrder={order} onSort={handleSort} /></th><th><SortHeader field="projected_return_pct" label={t('monitor:table.projectedReturn')} currentSort={sort} currentOrder={order} onSort={handleSort} /></th><th>{t('monitor:table.sentiment')}</th><th><SortHeader field="holding_pnl_pct" label={t('monitor:table.holdingPnl')} currentSort={sort} currentOrder={order} onSort={handleSort} /></th><th>{t('monitor:table.quoteUpdated')}</th><th>{t('monitor:table.actions')}</th></tr></thead>
             <tbody>
               {data?.items.map((stock) => {
                 const returnTarget = encodeURIComponent(location)
@@ -265,12 +265,13 @@ export function MonitorPage() {
                   <td>{stock.day_change_pct === null ? '--' : <Change value={stock.day_change_pct} />}</td>
                   <td>{stock.ai_score === null ? '--' : <span className="score-value">{number(stock.ai_score, 0)}</span>}</td>
                   <td>{stock.projected_return_pct === null ? '--' : <Change value={stock.projected_return_pct} />}</td>
+                  <td><div className="monitor-sentiment">{stock.sentiment?.score_1d === null || stock.sentiment?.score_1d === undefined ? '--' : <Change value={stock.sentiment.score_1d} suffix="" />}{stock.sentiment?.negative_shock && <span className="negative">!</span>}</div></td>
                   <td>{stock.holding_pnl_pct === null ? '--' : <div><Change value={stock.holding_pnl_pct} />{stock.market_value !== null && <small>{money(stock.market_value, currency)}</small>}</div>}</td>
                   <td><div className="date-cell"><strong>{stock.latest_trade_date ?? t('monitor:noQuote')}</strong><span>{stock.last_refreshed_at ? formatDateTime(stock.last_refreshed_at) : t('monitor:neverRefreshed')}</span></div></td>
                   <td><div className="row-tools"><button className={stock.wanted ? 'wanted' : ''} title={stock.wanted ? t('monitor:removeWanted') : t('monitor:addWanted')} aria-label={stock.wanted ? t('monitor:removeWanted') : t('monitor:addWanted')} onClick={(event) => { event.stopPropagation(); wantedMutation.mutate({ symbol: stock.symbol, wanted: !stock.wanted }) }}><Star fill={stock.wanted ? 'currentColor' : 'none'} /></button><button title={t('monitor:editMetadata')} aria-label={t('monitor:editMetadata')} onClick={(event) => { event.stopPropagation(); setEditor(stock) }}><Pencil /></button></div></td>
                 </tr>
               })}
-              {!query.isPending && !data?.items.length && <tr><td colSpan={9}><div className="empty-table">{t('monitor:empty')}</div></td></tr>}
+              {!query.isPending && !data?.items.length && <tr><td colSpan={10}><div className="empty-table">{t('monitor:empty')}</div></td></tr>}
             </tbody>
           </table>
         </div>

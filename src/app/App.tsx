@@ -9,6 +9,7 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage').then((module) =
 const ImageLabPage = lazy(() => import('./pages/ImageLabPage').then((module) => ({ default: module.ImageLabPage })))
 const PortfolioPage = lazy(() => import('./pages/PortfolioPage').then((module) => ({ default: module.PortfolioPage })))
 const MonitorPage = lazy(() => import('./pages/MonitorPage').then((module) => ({ default: module.MonitorPage })))
+const SentimentPage = lazy(() => import('./pages/SentimentPage').then((module) => ({ default: module.SentimentPage })))
 const StockPage = lazy(() => import('./pages/StockPage').then((module) => ({ default: module.StockPage })))
 const TradingPage = lazy(() => import('./pages/TradingPage').then((module) => ({ default: module.TradingPage })))
 
@@ -26,6 +27,7 @@ export function App() {
   if (path === '/') page = <DashboardPage />
   else if (path === '/recommendations') page = <RecommendationsRedirect />
   else if (path === '/monitor') page = <MonitorPage />
+  else if (path === '/sentiment') page = <SentimentPage />
   else if (path === '/portfolio') page = <PortfolioPage />
   else if (path === '/assistant') page = <AssistantPage />
   else if (path === '/trading') page = <TradingPage />

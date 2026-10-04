@@ -7,4 +7,6 @@ __pycache__/
 backend/image_service/storage/
 backend/market_data/storage/
 backend/trading/storage/
+backend/local_data/
+backend/storage/
 .codex-screen-previews/

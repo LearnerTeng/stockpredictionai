@@ -7,6 +7,7 @@ import {
   Languages,
   Menu,
   Radar,
+  Newspaper,
   Search,
   ShieldCheck,
   X,
@@ -19,6 +20,7 @@ import { supportedLanguages, type AppLanguage } from '../i18n'
 const navigation = [
   { to: '/', labelKey: 'nav.dashboard', icon: LayoutDashboard, end: true },
   { to: '/monitor', labelKey: 'nav.monitor', icon: Radar },
+  { to: '/sentiment', labelKey: 'nav.sentiment', icon: Newspaper },
   { to: '/portfolio', labelKey: 'nav.portfolio', icon: BriefcaseBusiness },
   { to: '/assistant', labelKey: 'nav.assistant', icon: Bot },
   { to: '/trading', labelKey: 'nav.trading', icon: CandlestickChart },

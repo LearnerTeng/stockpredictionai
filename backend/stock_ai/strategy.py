@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from statistics import mean
 from typing import Any
 
 from .features import FeatureSnapshot, TechnicalFeatureEngineer
+from .contracts import adjusted_price
 from .models import StatisticalForecaster
+
+
+def forecast_signal(forecaster, closes: list[float], steps: int = 5, history_window: int = 45) -> tuple[list[float], float]:
+    """Forecast strictly beyond the last observed bar, shared by research and monitoring."""
+    predictions = forecaster.forecast_series(closes, min(history_window, len(closes)), steps)
+    return predictions, (predictions[-1] / closes[-1] - 1.0) * 100
 
 
 @dataclass(frozen=True)
@@ -62,7 +68,7 @@ class MonitorSignalBuilder:
 
     def build(self, symbol: str, bars: list[dict[str, Any]]) -> dict[str, Any]:
         sorted_bars = sorted(bars, key=lambda bar: bar.get("trade_date") or bar.get("date") or "")
-        closes = [float(bar["close"]) for bar in sorted_bars if bar.get("close") is not None]
+        closes = [adjusted_price(bar) for bar in sorted_bars if bar.get("close") is not None]
         if len(closes) < 30:
             raise ValueError(f"{symbol} needs at least 30 bars for monitoring")
 
@@ -74,11 +80,7 @@ class MonitorSignalBuilder:
         features = self.feature_engineer.build(closes)
 
         forecast_steps = 5
-        forecast_window = min(45, len(closes) - forecast_steps)
-        predictions = self.forecaster.forecast_series(closes[:-forecast_steps], forecast_window, forecast_steps)
-        actuals = closes[-forecast_steps:]
-        forecast_delta_pct = ((predictions[-1] - latest_close) / latest_close * 100) if latest_close else 0.0
-        mae = mean(abs(pred - actual) for pred, actual in zip(predictions, actuals))
+        predictions, forecast_delta_pct = forecast_signal(self.forecaster, closes, forecast_steps)
         score, stance = self.scorer.score(features, forecast_delta_pct)
 
         alerts = build_alerts(change_pct, features)
@@ -97,10 +99,11 @@ class MonitorSignalBuilder:
             "forecast": {
                 "steps": forecast_steps,
                 "predictions": [round(value, 4) for value in predictions],
-                "actuals": [round(value, 4) for value in actuals],
+                "actuals": [],
                 "delta_pct": round(forecast_delta_pct, 4),
-                "mae": round(mae, 4),
+                "mae": None,
                 "model": self.forecaster.name,
+                "mode": "future",
             },
             "alerts": alerts,
             "historical_tail": [round(value, 4) for value in closes[-60:]],

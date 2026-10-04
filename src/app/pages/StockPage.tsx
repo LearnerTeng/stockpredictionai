@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { ArrowLeft, Bot, CalendarClock, Database, Play, TrendingUp } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Bot, CalendarClock, Database, ExternalLink, Newspaper, Play, TrendingUp } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
@@ -51,7 +51,7 @@ function ScenarioPanel({ scenario, currency }: { scenario: PositionScenario; cur
 }
 
 export function StockPage({ symbol }: { symbol: string }) {
-  const { t } = useTranslation('stock')
+  const { t } = useTranslation(['stock', 'sentiment'])
   const { searchParams } = useRouter()
   const [quantity, setQuantity] = useState('10')
   const [entryPrice, setEntryPrice] = useState('')
@@ -59,6 +59,7 @@ export function StockPage({ symbol }: { symbol: string }) {
   const detail = useQuery({ queryKey: ['monitor-stock', symbol], queryFn: () => api.monitorStock(symbol) })
   const bars = useQuery({ queryKey: ['bars', symbol], queryFn: () => api.bars(symbol), retry: false })
   const prediction = useQuery({ queryKey: ['prediction', symbol], queryFn: () => api.predict(symbol), retry: false })
+  const sentiment = useQuery({ queryKey: ['sentiment-stock', symbol], queryFn: () => api.sentimentStock(symbol), retry: false })
   const simulation = useMutation({
     mutationFn: () => api.simulatePosition({
       symbol,
@@ -93,9 +94,9 @@ export function StockPage({ symbol }: { symbol: string }) {
   }
   const currency = currencyForMarket(stock.market)
   const latestPrice = simulation.data?.latest_bar.close ?? stock.latest_price ?? item.latest_price
-  const projectedMove = prediction.data
-    ? latestPrice > 0 ? ((prediction.data.predictions[prediction.data.predictions.length - 1] - latestPrice) / latestPrice) * 100 : 0
-    : item.projected_return_pct
+  const future = prediction.data?.future_forecast
+  const projectedMove = future?.delta_pct ?? item.projected_return_pct
+  const quant = prediction.data?.quant_forecast
   const backTarget = searchParams.get('from') || '/monitor'
 
   return (
@@ -127,7 +128,39 @@ export function StockPage({ symbol }: { symbol: string }) {
           </div>
           <div className="prediction-readout">
             <div><Bot /><span>{t('predictionStatus')}</span><strong>{prediction.isPending ? t('calculating') : prediction.error ? t('failed') : t('steps', { count: prediction.data?.forecast_steps ?? 0 })}</strong></div>
-            <div><TrendingUp /><span>{t('predictionEnd')}</span><strong>{prediction.data ? money(prediction.data.predictions[prediction.data.predictions.length - 1] ?? latestPrice, currency, 2) : '--'}</strong></div>
+            <div><TrendingUp /><span>{t('predictionEnd')}</span><strong>{future ? money(future.predictions[future.predictions.length - 1], currency, 2) : '--'}</strong></div>
+            {quant && <>
+              <p>{quant.fallback_used ? t('baselineForecast') : t('registeredForecast')} · {quant.data_cutoff ?? quant.trained_until}</p>
+              {quant.data_stale && <p className="negative">{t('staleForecast')}</p>}
+              {quant.forecasts.map((forecast) => <div key={forecast.horizon_days}><span>{t('excessForecast', { days: forecast.horizon_days, benchmark: quant.objective.benchmark })}</span><strong><Change value={forecast.excess_return_pct} /></strong></div>)}
+            </>}
+          </div>
+        </article>
+      </section>
+
+      <section className="stock-sentiment-grid">
+        <article className="panel stock-sentiment-summary">
+          <div className="panel-title"><div><span>NEWS SENTIMENT</span><h2>{t('sentiment:title')}</h2></div>{sentiment.data?.snapshot.negative_shock && <span className="negative"><AlertTriangle />{t('sentiment:shocks')}</span>}</div>
+          {sentiment.isPending ? <LoadingPanel /> : sentiment.error ? <p className="muted-copy">{sentiment.error.message}</p> : <>
+            <div className="sentiment-window-values">
+              {(['score_1d', 'score_3d', 'score_7d'] as const).map((key, index) => <div key={key}><span>{[1, 3, 7][index]}D</span><strong>{sentiment.data.snapshot[key] === null ? '--' : <Change value={sentiment.data.snapshot[key] ?? 0} suffix="" />}</strong></div>)}
+              <div><span>{t('sentiment:sources')}</span><strong>{sentiment.data.snapshot.source_count}</strong></div>
+            </div>
+            <div className="shadow-forecast">
+              <div><Bot /><span>{t('stock:predictionStatus')}</span><strong>{prediction.data?.sentiment_shadow?.status ?? '...'}</strong></div>
+              {prediction.data?.sentiment_shadow?.forecasts?.map((item) => <div key={item.horizon_days}><span>{item.horizon_days}D</span><strong><Change value={item.shadow_excess_return_pct} /></strong><small>{item.sentiment_adjustment_pct >= 0 ? '+' : ''}{item.sentiment_adjustment_pct.toFixed(2)}% sentiment</small></div>)}
+            </div>
+          </>}
+        </article>
+        <article className="panel stock-news-feed">
+          <div className="panel-title"><div><span>TRACEABLE SOURCES</span><h2>{t('sentiment:latestNews')}</h2></div><Link to="/sentiment">{t('sentiment:marketScore')}</Link></div>
+          <div className="news-list compact">
+            {sentiment.data?.articles.slice(0, 6).map((article) => <div className="news-item" key={article.id}>
+              <div className="news-meta"><span className={`sentiment-badge ${article.sentiment_label ?? 'pending'}`}>{article.sentiment_label ? t(`sentiment:labels.${article.sentiment_label}`) : t('sentiment:pending')}</span><time>{article.published_at.slice(0, 10)}</time></div>
+              <h3>{article.url ? <a href={article.url} target="_blank" rel="noopener noreferrer">{article.title}<ExternalLink /></a> : article.title}</h3>
+              <div className="news-source"><Newspaper />{article.source_domain || article.source}</div>
+            </div>)}
+            {!sentiment.isPending && !sentiment.data?.articles.length && <div className="empty-table">{t('sentiment:noData')}</div>}
           </div>
         </article>
       </section>

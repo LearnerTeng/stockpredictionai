@@ -7,6 +7,7 @@ from pathlib import Path
 import sqlite3
 from threading import Lock
 from typing import Any
+from stock_ai.contracts import normalize_bars
 from uuid import uuid4
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "storage" / "market_data.db"
@@ -130,6 +131,20 @@ class MarketDataStore:
                         FOREIGN KEY(batch_id) REFERENCES import_batches(id)
                     );
 
+                    CREATE TABLE IF NOT EXISTS corporate_actions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        symbol TEXT NOT NULL,
+                        action_date TEXT NOT NULL,
+                        action_type TEXT NOT NULL,
+                        value REAL NOT NULL,
+                        currency TEXT,
+                        source TEXT NOT NULL,
+                        payload_json TEXT,
+                        created_at TEXT NOT NULL,
+                        UNIQUE(symbol, action_date, action_type),
+                        FOREIGN KEY(symbol) REFERENCES stock_universe(symbol)
+                    );
+
                     CREATE INDEX IF NOT EXISTS idx_daily_bars_symbol_date
                     ON daily_bars(symbol, trade_date DESC);
 
@@ -142,6 +157,16 @@ class MarketDataStore:
                     conn.execute("ALTER TABLE stock_universe ADD COLUMN market TEXT NOT NULL DEFAULT 'US'")
                 if "last_refreshed_at" not in columns:
                     conn.execute("ALTER TABLE stock_universe ADD COLUMN last_refreshed_at TEXT")
+                batch_columns = {row["name"] for row in conn.execute("PRAGMA table_info(import_batches)").fetchall()}
+                for name, definition in (
+                    ("request_payload_json", "TEXT"),
+                    ("errors_json", "TEXT NOT NULL DEFAULT '[]'"),
+                    ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+                    ("max_attempts", "INTEGER NOT NULL DEFAULT 3"),
+                    ("started_at", "TEXT"),
+                ):
+                    if name not in batch_columns:
+                        conn.execute(f"ALTER TABLE import_batches ADD COLUMN {name} {definition}")
                 conn.execute(
                     """
                     UPDATE stock_universe
@@ -405,6 +430,102 @@ class MarketDataStore:
             raise ValueError("batch not found")
         return self._serialize_batch(row)
 
+    def update_import_batch(self, batch_id: str, **changes: Any) -> dict[str, Any]:
+        allowed = {
+            "status",
+            "imported_symbols",
+            "records_inserted",
+            "notes",
+            "request_payload",
+            "errors",
+            "attempts",
+            "max_attempts",
+            "started_at",
+            "finished_at",
+        }
+        unknown = set(changes) - allowed
+        if unknown:
+            raise ValueError(f"unsupported import batch fields: {', '.join(sorted(unknown))}")
+        columns = {
+            "imported_symbols": "imported_symbols_json",
+            "request_payload": "request_payload_json",
+            "errors": "errors_json",
+        }
+        assignments: list[str] = []
+        values: list[Any] = []
+        for key, value in changes.items():
+            assignments.append(f"{columns.get(key, key)} = ?")
+            values.append(json.dumps(value, ensure_ascii=True) if key in columns else value)
+        assignments.append("updated_at = ?")
+        values.extend([utc_now_iso(), batch_id])
+        with self._lock:
+            with closing(self._connect()) as conn:
+                cursor = conn.execute(
+                    f"UPDATE import_batches SET {', '.join(assignments)} WHERE id = ?",
+                    values,
+                )
+                if cursor.rowcount == 0:
+                    raise ValueError("batch not found")
+                conn.commit()
+        return self.get_import_batch(batch_id)
+
+    def claim_import_batch(self, batch_id: str) -> bool:
+        now = utc_now_iso()
+        with self._lock, closing(self._connect()) as conn:
+            result = conn.execute("UPDATE import_batches SET status = 'running', attempts = attempts + 1, started_at = ?, updated_at = ? WHERE id = ? AND status IN ('queued', 'retrying')", (now, now, batch_id))
+            conn.commit()
+            return result.rowcount == 1
+
+    def list_pending_import_batches(self, limit: int = 10) -> list[dict[str, Any]]:
+        with self._lock:
+            with closing(self._connect()) as conn:
+                rows = conn.execute(
+                    "SELECT * FROM import_batches WHERE status IN ('queued', 'retrying') ORDER BY created_at LIMIT ?",
+                    (min(max(int(limit), 1), 100),),
+                ).fetchall()
+        return [self._serialize_batch(row) for row in rows]
+
+    def ingest_corporate_actions(
+        self,
+        symbol: str,
+        actions: list[dict[str, Any]],
+        *,
+        source: str = "manual",
+    ) -> dict[str, Any]:
+        normalized_symbol = normalize_symbol(symbol)
+        now = utc_now_iso()
+        with self._lock:
+            with closing(self._connect()) as conn:
+                for action in actions:
+                    action_date = normalize_trade_date(action.get("date") or action.get("action_date"))
+                    action_type = str(action.get("type") or action.get("action_type") or "").strip().lower()
+                    if action_type not in {"dividend", "split"}:
+                        raise ValueError("action type must be dividend or split")
+                    conn.execute(
+                        """
+                        INSERT INTO corporate_actions (
+                            symbol, action_date, action_type, value, currency, source, payload_json, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(symbol, action_date, action_type) DO UPDATE SET
+                            value = excluded.value,
+                            currency = excluded.currency,
+                            source = excluded.source,
+                            payload_json = excluded.payload_json
+                        """,
+                        (
+                            normalized_symbol,
+                            action_date,
+                            action_type,
+                            float(action["value"]),
+                            str(action.get("currency") or "").strip() or None,
+                            source,
+                            json.dumps(action.get("payload") or action, ensure_ascii=True),
+                            now,
+                        ),
+                    )
+                conn.commit()
+        return {"symbol": normalized_symbol, "rows_received": len(actions), "source": source}
+
     def ingest_daily_bars(
         self,
         symbol: str,
@@ -414,6 +535,7 @@ class MarketDataStore:
         batch_id: str | None = None,
     ) -> dict[str, Any]:
         normalized_symbol = normalize_symbol(symbol)
+        bars = normalize_bars(bars)
         if not bars:
             raise ValueError("bars must contain at least one row")
 
@@ -527,7 +649,7 @@ class MarketDataStore:
 
     def list_daily_bars(self, symbol: str, limit: int = 60) -> list[dict[str, Any]]:
         normalized_symbol = normalize_symbol(symbol)
-        normalized_limit = min(max(int(limit), 1), 500)
+        normalized_limit = min(max(int(limit), 1), 5000)
         with self._lock:
             with closing(self._connect()) as conn:
                 rows = conn.execute(
@@ -557,4 +679,9 @@ class MarketDataStore:
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "finished_at": row["finished_at"],
+            "request_payload": json.loads(row["request_payload_json"] or "{}") if "request_payload_json" in row.keys() else {},
+            "errors": json.loads(row["errors_json"] or "[]") if "errors_json" in row.keys() else [],
+            "attempts": row["attempts"] if "attempts" in row.keys() else 0,
+            "max_attempts": row["max_attempts"] if "max_attempts" in row.keys() else 3,
+            "started_at": row["started_at"] if "started_at" in row.keys() else None,
         }

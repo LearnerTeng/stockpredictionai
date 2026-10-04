@@ -4,26 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import os
+from secrets import compare_digest
 from pathlib import Path
 from statistics import mean
 from typing import Any
-
-from flask import Flask, abort, jsonify, request, send_from_directory
-from flask_cors import CORS
-from market_data.service import store as market_data_store
-from market_data.store import normalize_market, normalize_market_symbol
-from monitoring import MonitorService
-from stock_ai.data import DEFAULT_RANGE_OPTIONS, list_value as stock_list_value
-from stock_ai.features import (
-    ema as stock_ema,
-    fourier_trend as stock_fourier_trend,
-    rsi as stock_rsi,
-    sma as stock_sma,
-)
-from stock_ai.pipeline import PredictionRequest, StockAiPipeline
-from stock_ai.simulation import PositionSimulationConfig
-from trading.service import store as trading_store
-import requests
 
 try:
     from dotenv import load_dotenv
@@ -33,17 +17,61 @@ except ImportError:  # pragma: no cover - optional during transition
 
 load_dotenv(Path(__file__).with_name(".env"))
 
+from flask import Flask, abort, jsonify, request, send_from_directory
+from flask_cors import CORS
+from market_data.service import store as market_data_store
+from market_data.ingestion import IngestionService
+from market_data.store import normalize_market, normalize_market_symbol
+from monitoring import MonitorService
+from portfolio_risk import PortfolioRiskService
+from database.session import configured_database_url
+from sentiment.mailer import SmtpMailer
+from sentiment.service import NewsIngestionService
+from sentiment.store import SentimentStore
+from stock_ai.data import DEFAULT_RANGE_OPTIONS, list_value as stock_list_value
+from stock_ai.features import (
+    ema as stock_ema,
+    fourier_trend as stock_fourier_trend,
+    rsi as stock_rsi,
+    sma as stock_sma,
+)
+from stock_ai.ml_models import create_forecaster
+from stock_ai.models import StatisticalForecaster
+from stock_ai.pipeline import PredictionRequest, StockAiPipeline
+from stock_ai.simulation import PositionSimulationConfig
+from stock_ai.validation import walk_forward_evaluate
+from trading.service import store as trading_store
+import requests
+
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","))
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+
+
+@app.before_request
+def require_api_access():
+    origin = request.headers.get("Origin")
+    allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    if origin and origin not in allowed_origins:
+        return jsonify({"error": "Request origin is not allowed"}), 403
+    if request.method == "OPTIONS":
+        return None
+    token = os.getenv("API_ACCESS_TOKEN", "")
+    if token:
+        if not compare_digest(request.headers.get("Authorization", ""), f"Bearer {token}"):
+            return jsonify({"error": "API authentication required"}), 401
+    elif request.remote_addr not in {"127.0.0.1", "::1"}:
+        return jsonify({"error": "Remote API access requires API_ACCESS_TOKEN"}), 403
+    return None
 
 AI_DISCLAIMER = (
-    "AI-generated interpretation based only on the current prediction payload and historical tail. "
-    "It does not include live news, filings, or broader market context and is not investment advice."
+    "AI-generated interpretation uses only the supplied prediction and stored sentiment context. "
+    "News may be delayed or incomplete; this is not investment advice."
 )
 AI_DISCLAIMERS = {
     "en": AI_DISCLAIMER,
-    "zh-CN": "AI 解读仅基于当前预测数据和历史尾部数据，不包含实时新闻、公告或更广泛的市场信息，也不构成投资建议。",
-    "ja": "AI による解釈は現在の予測データと直近の履歴データだけに基づきます。リアルタイムのニュース、開示情報、広範な市場情報は含まず、投資助言ではありません。",
+    "zh-CN": "AI 解读仅使用已提供的预测和已存储情绪数据；新闻可能延迟或不完整，也不构成投资建议。",
+    "ja": "AI による解釈は提供された予測と保存済みのセンチメント情報だけを使用します。ニュースは遅延または不完全な可能性があり、投資助言ではありません。",
 }
 ANALYSIS_LANGUAGE_NAMES = {"en": "English", "zh-CN": "Simplified Chinese", "ja": "Japanese"}
 DEFAULT_OPENAI_MODEL = "gpt-5-mini"
@@ -73,6 +101,37 @@ class AnalyzeRequest:
 DEFAULT_MONITOR_SYMBOLS = ["AAPL", "MSFT", "NVDA", "GS", "SPY"]
 YAHOO_RANGE_OPTIONS = DEFAULT_RANGE_OPTIONS
 stock_ai_pipeline = StockAiPipeline()
+
+
+def _on_ingested_symbol(symbol: str, bars: list[dict[str, Any]]) -> None:
+    signal = stock_ai_pipeline.build_signal(symbol, bars)
+    trading_store.upsert_monitor_signals([signal])
+
+
+ingestion_service = IngestionService(
+    market_data_store,
+    stock_ai_pipeline.market_data,
+    on_symbol=_on_ingested_symbol,
+)
+
+_database_url = configured_database_url()
+sentiment_store = SentimentStore(_database_url) if _database_url else None
+sentiment_service = NewsIngestionService(sentiment_store) if sentiment_store else None
+
+
+def _require_sentiment() -> tuple[SentimentStore, NewsIngestionService]:
+    if sentiment_store is None or sentiment_service is None:
+        raise RuntimeError("DATABASE_URL is required for news sentiment features")
+    return sentiment_store, sentiment_service
+
+
+def _add_sentiment(item: dict[str, Any]) -> dict[str, Any]:
+    if sentiment_store is None:
+        return {**item, "sentiment": None}
+    try:
+        return {**item, "sentiment": sentiment_store.snapshot(item["symbol"], 24)}
+    except Exception:  # noqa: BLE001 - monitoring remains usable during migration/startup
+        return {**item, "sentiment": None}
 
 MONITOR_FILTER_KEYS = {
     "q", "view", "market", "sector", "exchange", "price_min", "price_max",
@@ -424,10 +483,45 @@ def data_import_yahoo() -> tuple[Any, int]:
         return jsonify({"error": str(err)}), 400
 
 
+@app.post("/data/ingestion/jobs")
+def data_create_ingestion_job() -> tuple[Any, int]:
+    try:
+        payload = _require_json_object()
+        raw_symbols = payload.get("symbols")
+        if raw_symbols is None:
+            filters = payload.get("filters") or {}
+            if not isinstance(filters, dict):
+                raise ValueError("filters must be an object")
+            symbols = _monitor_service().matching_symbols(_monitor_filters(filters))
+        elif isinstance(raw_symbols, list):
+            symbols = [str(symbol) for symbol in raw_symbols]
+        else:
+            raise ValueError("symbols must be an array")
+        job = ingestion_service.enqueue(
+            symbols,
+            range_value=str(payload.get("range") or "10y"),
+            include_benchmark=bool(payload.get("include_benchmark", True)),
+            max_attempts=int(payload.get("max_attempts") or 3),
+        )
+        return jsonify({"job": job}), 202
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+
+
+@app.get("/data/ingestion/jobs/<job_id>")
+def data_get_ingestion_job(job_id: str) -> tuple[Any, int]:
+    try:
+        return jsonify({"job": market_data_store.get_import_batch(job_id)}), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 404
+
+
 @app.get("/monitor/stocks")
 def monitor_stocks() -> tuple[Any, int]:
     try:
-        return jsonify(_monitor_service().query(_monitor_filters(request.args))), 200
+        result = _monitor_service().query(_monitor_filters(request.args))
+        result["items"] = [_add_sentiment(item) for item in result["items"]]
+        return jsonify(result), 200
     except ValueError as err:
         return jsonify({"error": str(err)}), 400
 
@@ -476,7 +570,7 @@ def monitor_add_stock() -> tuple[Any, int]:
 @app.get("/monitor/stocks/<symbol>")
 def monitor_stock_detail(symbol: str) -> tuple[Any, int]:
     try:
-        return jsonify(_monitor_service().detail(symbol)), 200
+        return jsonify(_add_sentiment(_monitor_service().detail(symbol))), 200
     except ValueError as err:
         status = 404 if "not found" in str(err) else 400
         return jsonify({"error": str(err)}), status
@@ -645,17 +739,35 @@ def recommendation_detail(symbol: str) -> tuple[Any, int]:
 @app.get("/portfolio")
 def portfolio() -> tuple[Any, int]:
     try:
-        return jsonify(trading_store.get_portfolio()), 200
+        return jsonify(trading_store.get_portfolio(request.args.get("id", "primary"))), 200
     except ValueError as err:
         return jsonify({"error": str(err)}), 404
+
+
+@app.get("/portfolios")
+def portfolios() -> tuple[Any, int]:
+    return jsonify({"items": trading_store.list_portfolios()}), 200
 
 
 @app.get("/portfolio/performance")
 def portfolio_performance() -> tuple[Any, int]:
     try:
-        return jsonify(trading_store.get_performance()), 200
+        return jsonify(trading_store.get_performance(request.args.get("id", "primary"))), 200
     except ValueError as err:
         return jsonify({"error": str(err)}), 404
+
+
+@app.get("/portfolio/risk")
+def portfolio_risk() -> tuple[Any, int]:
+    try:
+        return jsonify(
+            PortfolioRiskService(market_data_store, trading_store).analyze(
+                portfolio_id=request.args.get("id", "primary")
+            )
+        ), 200
+    except ValueError as err:
+        status = 404 if "not found" in str(err) else 400
+        return jsonify({"error": str(err)}), status
 
 
 @app.get("/trading/orders")
@@ -685,6 +797,24 @@ def trading_confirm_order(order_id: str) -> tuple[Any, int]:
     except ValueError as err:
         status = 404 if "not found" in str(err) else 409
         return jsonify({"error": str(err)}), status
+
+
+@app.post("/trading/orders/<order_id>/cancel")
+def trading_cancel_order(order_id: str):
+    try:
+        return jsonify(trading_store.cancel_order(order_id)), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 404 if "not found" in str(err) else 409
+
+
+@app.route("/trading/control", methods=["GET", "PUT"])
+def trading_control():
+    try:
+        if request.method == "GET":
+            return jsonify(trading_store.get_trading_control()), 200
+        return jsonify(trading_store.set_trading_halted(_require_json_object().get("halted"))), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
 
 
 @app.get("/image/health")
@@ -768,8 +898,8 @@ def _build_analysis_prompt(req: AnalyzeRequest) -> tuple[str, str]:
 
     system_prompt = (
         "You are a market analysis assistant for a stock prediction dashboard. "
-        "Use only the supplied prediction payload. "
-        "Do not claim access to live prices, market news, earnings, macro events, or external data. "
+        "Use only the supplied prediction payload and its stored sentiment_context. "
+        "Do not claim access to any news, prices, filings, earnings, or macro data not present in that payload. "
         "Do not give direct buy or sell recommendations. "
         "Focus on interpreting the model output, forecast shape, errors, uncertainty cues, and operational cautions. "
         f"Write every user-facing field exclusively in {ANALYSIS_LANGUAGE_NAMES[req.language]}. "
@@ -787,6 +917,8 @@ def _build_analysis_prompt(req: AnalyzeRequest) -> tuple[str, str]:
         f"historical_tail_sample: {json.dumps(history_sample)}\n"
         f"predictions: {json.dumps(forecast_sample)}\n"
         f"actuals: {json.dumps(actual_sample)}\n"
+        f"sentiment_context: {json.dumps(prediction.get('sentiment_context'), ensure_ascii=False)}\n"
+        f"sentiment_shadow: {json.dumps(prediction.get('sentiment_shadow'), ensure_ascii=False)}\n"
     )
 
     return system_prompt, user_prompt
@@ -973,6 +1105,16 @@ def predict() -> tuple[dict, int]:
                 forecast_steps=req.forecast_steps,
             )
         )
+        if sentiment_store is not None and sentiment_service is not None:
+            try:
+                result["sentiment_context"] = sentiment_store.snapshot(req.symbol)
+                result["sentiment_shadow"] = sentiment_service.shadow(req.symbol, result.get("quant_forecast"))
+            except Exception as err:  # noqa: BLE001 - preserve the existing prediction contract
+                result["sentiment_context"] = None
+                result["sentiment_shadow"] = {"status": "unavailable", "error": str(err), "production_eligible": False}
+        else:
+            result["sentiment_context"] = None
+            result["sentiment_shadow"] = {"status": "unavailable", "error": "DATABASE_URL is not configured", "production_eligible": False}
         return jsonify(result), 200
     except ValueError as err:
         return jsonify({"error": str(err)}), 400
@@ -1099,6 +1241,57 @@ def backtest_run() -> tuple[Any, int]:
         return jsonify({"error": f"Backtest failed: {err}"}), 500
 
 
+@app.get("/model/compare")
+def model_compare() -> tuple[Any, int]:
+    try:
+        if os.getenv("ENABLE_WEB_MODEL_TRAINING", "").lower() not in {"1", "true", "yes"}:
+            return jsonify({"error": "Web model training is disabled. Run model evaluation from a worker or CLI."}), 409
+        symbol = str(request.args.get("symbol", "")).strip().upper()
+        if not symbol:
+            raise ValueError("symbol is required")
+        range_value = str(request.args.get("range", "5y") or "5y")
+        try:
+            steps = int(request.args.get("steps", 5))
+        except (TypeError, ValueError) as err:
+            raise ValueError("steps must be an integer") from err
+        if steps < 1 or steps > 30:
+            raise ValueError("steps must be between 1 and 30")
+
+        local_bars = market_data_store.list_daily_bars(symbol, 500)
+        bars = local_bars or _fetch_yahoo_bars(symbol, range_value)
+        if len(bars) < 100:
+            raise ValueError(f"{symbol} needs at least 100 bars for model comparison, found {len(bars)}")
+
+        statistical = StatisticalForecaster()
+        ml_forecaster = create_forecaster(prefer_ml=True)
+        candidates = [statistical]
+        if ml_forecaster.name != statistical.name:
+            candidates.append(ml_forecaster)
+
+        models: list[dict[str, Any]] = []
+        for forecaster in candidates:
+            try:
+                validation = walk_forward_evaluate(forecaster, bars, steps=steps)
+            except Exception as err:  # noqa: BLE001
+                validation = {"engine": "walk-forward", "status": "error", "error": str(err)}
+            models.append({"name": forecaster.name, "validation": validation})
+
+        return jsonify(
+            {
+                "symbol": symbol,
+                "bars": len(bars),
+                "steps": steps,
+                "models": models,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "disclaimer": "Walk-forward validation on historical bars only. It is not investment advice.",
+            }
+        ), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    except Exception as err:  # noqa: BLE001
+        return jsonify({"error": f"Model comparison failed: {err}"}), 500
+
+
 @app.post("/simulation/position")
 def position_simulation() -> tuple[Any, int]:
     try:
@@ -1144,6 +1337,84 @@ def notification_signal() -> tuple[Any, int]:
         return jsonify({"error": f"Notification failed: {err}"}), 500
 
 
+@app.get("/sentiment/overview")
+def sentiment_overview() -> tuple[Any, int]:
+    try:
+        store, _ = _require_sentiment()
+        filters = {key: request.args.get(key) for key in (
+            "window", "market", "symbol", "label", "source_tier", "source", "event_type", "page", "page_size"
+        ) if request.args.get(key) is not None}
+        return jsonify(store.overview(filters)), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    except RuntimeError as err:
+        return jsonify({"error": str(err)}), 503
+
+
+@app.get("/sentiment/stocks/<symbol>")
+def sentiment_stock(symbol: str) -> tuple[Any, int]:
+    try:
+        store, _ = _require_sentiment()
+        return jsonify(store.stock_detail(
+            symbol, str(request.args.get("window") or "7d"),
+            int(request.args.get("page") or 1), min(int(request.args.get("page_size") or 30), 100),
+        )), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    except RuntimeError as err:
+        return jsonify({"error": str(err)}), 503
+
+
+@app.post("/sentiment/refresh")
+def sentiment_refresh() -> tuple[Any, int]:
+    try:
+        _, service = _require_sentiment()
+        payload = _require_json_object()
+        mode = str(payload.get("mode") or "incremental")
+        symbols = payload.get("symbols")
+        markets = payload.get("markets")
+        if symbols is not None and not isinstance(symbols, list):
+            raise ValueError("symbols must be an array")
+        if markets is not None and not isinstance(markets, list):
+            raise ValueError("markets must be an array")
+        return jsonify({"job": service.enqueue(mode=mode, symbols=symbols, markets=markets)}), 202
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    except RuntimeError as err:
+        return jsonify({"error": str(err)}), 503
+
+
+@app.get("/sentiment/jobs/<job_id>")
+def sentiment_job(job_id: str) -> tuple[Any, int]:
+    try:
+        store, _ = _require_sentiment()
+        return jsonify({"job": store.job(job_id)}), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 404
+    except RuntimeError as err:
+        return jsonify({"error": str(err)}), 503
+
+
+@app.get("/sentiment/settings")
+def sentiment_get_settings() -> tuple[Any, int]:
+    try:
+        store, _ = _require_sentiment()
+        return jsonify(store.settings(smtp_configured=SmtpMailer().configured)), 200
+    except RuntimeError as err:
+        return jsonify({"error": str(err)}), 503
+
+
+@app.put("/sentiment/settings")
+def sentiment_put_settings() -> tuple[Any, int]:
+    try:
+        store, _ = _require_sentiment()
+        return jsonify(store.update_settings(_require_json_object(), smtp_configured=SmtpMailer().configured)), 200
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    except RuntimeError as err:
+        return jsonify({"error": str(err)}), 503
+
+
 @app.post("/manual-orders/ticket")
 def manual_order_ticket() -> tuple[Any, int]:
     try:
@@ -1159,4 +1430,4 @@ def manual_order_ticket() -> tuple[Any, int]:
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000, debug=True)
+    app.run(host=os.getenv("API_HOST", "127.0.0.1"), port=8000, debug=False)

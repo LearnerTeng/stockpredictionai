@@ -90,3 +90,15 @@ class StatisticalForecaster:
         mae = mean(abs(pred - actual) for pred, actual in zip(preds, test_series))
         rmse = sqrt(mean((pred - actual) ** 2 for pred, actual in zip(preds, test_series)))
         return ForecastResult(predictions=preds, actuals=test_series, mae=mae, rmse=rmse)
+
+    # Bar-based conveniences so the pipeline and walk-forward validation can
+    # treat every forecaster uniformly; the statistical model only reads closes.
+    def forecast_from_bars(self, bars: list[dict], steps: int, *, history_window: int | None = None) -> list[float]:
+        closes = [float(bar["close"]) for bar in bars]
+        window = history_window or min(60, max(len(closes) - steps, 10))
+        return self.forecast_series(closes, window, steps)
+
+    def evaluate_from_bars(self, bars: list[dict], steps: int, *, history_window: int | None = None) -> ForecastResult:
+        closes = [float(bar["close"]) for bar in bars]
+        window = history_window or min(60, max(len(closes) - steps, 10))
+        return self.evaluate(closes, window, steps)

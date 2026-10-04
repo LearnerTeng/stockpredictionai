@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-DEFAULT_RANGE_OPTIONS = {"3mo", "6mo", "1y", "2y", "5y"}
+DEFAULT_RANGE_OPTIONS = {"3mo", "6mo", "1y", "2y", "5y", "10y"}
 
 
 @dataclass(frozen=True)
@@ -133,11 +133,41 @@ class YahooFinanceDataProvider:
             "exchange": str(meta.get("fullExchangeName") or meta.get("exchangeName") or "").strip() or None,
         }
 
+    def fetch_corporate_actions(self, symbol: str, range_value: str = "10y") -> list[dict[str, Any]]:
+        payload = self._fetch_chart_payload(normalize_symbol(symbol), range_value)
+        result = (payload.get("chart", {}).get("result") or [{}])[0]
+        events = result.get("events") or {}
+        actions: list[dict[str, Any]] = []
+        for item in (events.get("dividends") or {}).values():
+            timestamp = int(item["date"])
+            actions.append(
+                {
+                    "date": datetime.fromtimestamp(timestamp, timezone.utc).date().isoformat(),
+                    "type": "dividend",
+                    "value": float(item["amount"]),
+                    "currency": (result.get("meta") or {}).get("currency"),
+                    "payload": item,
+                }
+            )
+        for item in (events.get("splits") or {}).values():
+            timestamp = int(item["date"])
+            numerator = float(item.get("numerator") or 0)
+            denominator = float(item.get("denominator") or 1)
+            actions.append(
+                {
+                    "date": datetime.fromtimestamp(timestamp, timezone.utc).date().isoformat(),
+                    "type": "split",
+                    "value": numerator / denominator if denominator else float(item.get("splitRatio") or 1),
+                    "payload": item,
+                }
+            )
+        return sorted(actions, key=lambda item: item["date"])
+
     def _fetch_chart_payload(self, symbol: str, range_value: str) -> dict[str, Any]:
         normalized_symbol = normalize_symbol(symbol)
         endpoint = (
             f"https://query1.finance.yahoo.com/v8/finance/chart/{normalized_symbol}"
-            f"?range={range_value}&interval=1d&includeAdjustedClose=true"
+            f"?range={range_value}&interval=1d&includeAdjustedClose=true&events=div%2Csplits"
         )
         req = Request(
             endpoint,
