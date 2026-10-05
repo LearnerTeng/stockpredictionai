@@ -173,10 +173,12 @@ export const api = {
     request<SentimentSettings>('/sentiment/settings', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     }),
-  analyzeImage: async (file: File) => {
+  imageHistory: (page: number) => request<{ items: { id: string; algorithm: string; status: string; summary: string | null; input_url: string; output_url: string | null; created_at: string }[] }>(`/image/history?page=${page}&page_size=8`),
+  imageJob: (id: string) => request<Record<string, unknown>>(`/image/jobs/${encodeURIComponent(id)}`),
+  analyzeImage: async (file: File, algorithm = 'baseline-inspector') => {
     const body = new FormData()
     body.append('file', file)
-    body.append('algorithm', 'baseline')
+    body.append('algorithm', algorithm)
     body.append('options', '{}')
     return request<Record<string, unknown>>('/image/analyze', { method: 'POST', body })
   },

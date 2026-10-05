@@ -1,27 +1,29 @@
-import { HeatmapChart, LineChart, PieChart } from 'echarts/charts'
-import { GridComponent, LegendComponent, MarkLineComponent, TooltipComponent, VisualMapComponent } from 'echarts/components'
+import { BarChart, CandlestickChart, HeatmapChart, LineChart, PieChart } from 'echarts/charts'
+import { DataZoomComponent, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent, VisualMapComponent } from 'echarts/components'
 import { graphic, init, use, type EChartsCoreOption } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { CandlestickSeries, createChart, HistogramSeries, type Time } from 'lightweight-charts'
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { CorrelationMatrix, PerformancePoint, Position, PriceBar, SimulationPoint } from '../types'
 
-use([HeatmapChart, LineChart, PieChart, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent, VisualMapComponent, CanvasRenderer])
+use([BarChart, CandlestickChart, HeatmapChart, LineChart, PieChart, DataZoomComponent, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent, VisualMapComponent, CanvasRenderer])
 
 function useEChart(option: EChartsCoreOption) {
   const ref = useRef<HTMLDivElement>(null)
+  const chartRef = useRef<ReturnType<typeof init> | null>(null)
   useEffect(() => {
     if (!ref.current) return
     const chart = init(ref.current)
-    chart.setOption(option)
+    chartRef.current = chart
     const observer = new ResizeObserver(() => chart.resize())
     observer.observe(ref.current)
     return () => {
       observer.disconnect()
       chart.dispose()
+      chartRef.current = null
     }
-  }, [option])
+  }, [])
+  useEffect(() => { chartRef.current?.setOption(option, { notMerge: true }) }, [option])
   return ref
 }
 
@@ -177,32 +179,24 @@ export function CorrelationHeatmap({ matrix }: { matrix: CorrelationMatrix }) {
 
 export function PriceChart({ bars }: { bars: PriceBar[] }) {
   const { t } = useTranslation('charts')
-  const container = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!container.current || !bars.length) return
-    const chart = createChart(container.current, {
-      layout: { background: { color: 'transparent' }, textColor: '#7890aa', fontFamily: 'Space Grotesk' },
-      grid: { vertLines: { color: 'rgba(77,104,132,.12)' }, horzLines: { color: 'rgba(77,104,132,.12)' } },
-      rightPriceScale: { borderColor: '#26364b' },
-      timeScale: { borderColor: '#26364b' },
-      height: 420,
-    })
-    const candles = chart.addSeries(CandlestickSeries, { upColor: '#3dd6a6', downColor: '#ff6b7a', borderVisible: false, wickUpColor: '#3dd6a6', wickDownColor: '#ff6b7a' })
-    const volume = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: '', color: '#35506d' }, 1)
-    const sorted = [...bars].sort((left, right) => left.trade_date.localeCompare(right.trade_date))
-    candles.setData(sorted.map((bar) => ({
-      time: bar.trade_date as Time,
-      open: bar.open ?? bar.close,
-      high: bar.high ?? bar.close,
-      low: bar.low ?? bar.close,
-      close: bar.close,
-    })))
-    volume.setData(sorted.map((bar) => ({ time: bar.trade_date as Time, value: bar.volume ?? 0, color: (bar.close >= (bar.open ?? bar.close)) ? 'rgba(61,214,166,.35)' : 'rgba(255,107,122,.35)' })))
-    chart.timeScale().fitContent()
-    const observer = new ResizeObserver(() => chart.applyOptions({ width: container.current?.clientWidth ?? 0 }))
-    observer.observe(container.current)
-    return () => { observer.disconnect(); chart.remove() }
-  }, [bars])
-  if (!bars.length) return <div className="empty-chart"><strong>{t('noBars')}</strong><span>{t('noBarsHint')}</span><a href="#/monitor">{t('openMonitor')}</a></div>
-  return <div ref={container} className="price-chart" />
+  const sorted = [...bars].sort((a, b) => a.trade_date.localeCompare(b.trade_date))
+  const dates = sorted.map((bar) => bar.trade_date)
+  const option: EChartsCoreOption = {
+    animation: false,
+    tooltip: { trigger: 'axis' },
+    axisPointer: { link: [{ xAxisIndex: 'all' }] },
+    grid: [{ left: 64, right: 24, top: 16, bottom: 140 }, { left: 64, right: 24, height: 64, bottom: 48 }],
+    xAxis: [0, 1].map((gridIndex) => ({ ...baseAxis, type: 'category', gridIndex, data: dates })),
+    yAxis: [0, 1].map((gridIndex) => ({ ...baseAxis, type: 'value', gridIndex, scale: true })),
+    dataZoom: [{ type: 'inside', xAxisIndex: [0, 1] }, { type: 'slider', xAxisIndex: [0, 1], bottom: 4, height: 20 }],
+    series: [
+      { type: 'candlestick', data: sorted.map(b => [b.open ?? b.close, b.close, b.low ?? b.close, b.high ?? b.close]),
+        itemStyle: { color: '#3dd6a6', color0: '#ff6b7a', borderColor: '#3dd6a6', borderColor0: '#ff6b7a' } },
+      { type: 'bar', xAxisIndex: 1, yAxisIndex: 1,
+        data: sorted.map(b => ({ value: b.volume ?? 0, itemStyle: { color: b.close >= (b.open ?? b.close) ? '#3dd6a6' : '#ff6b7a' } })) },
+    ],
+  }
+  const ref = useEChart(option)
+  return <><div ref={ref} className="price-chart" style={{ height: 420, display: bars.length ? undefined : 'none' }} />
+    {!bars.length && <div className="empty-chart"><strong>{t('noBars')}</strong><span>{t('noBarsHint')}</span><a href="#/monitor">{t('openMonitor')}</a></div>}</>
 }

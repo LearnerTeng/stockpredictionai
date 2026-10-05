@@ -9,6 +9,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from stock_ai.research import activate_run, train_run, score_archived_predictions
+from stock_ai.registry import active_models, register_manifest
 
 
 def main():
@@ -24,6 +25,7 @@ def main():
     activate = commands.add_parser("activate", help="Activate a candidate passing the gate; activate an earlier run to roll back")
     activate.add_argument("run_id")
     commands.add_parser("list", help="List candidates and active selections")
+    commands.add_parser("import-registry", help="Import existing artifact manifests into DATABASE_URL; does not activate models")
     args = parser.parse_args()
     if args.command in {"train", "score"}:
         symbol = args.symbol.strip().upper()
@@ -38,9 +40,16 @@ def main():
         result = (train_run if args.command == "train" else score_archived_predictions)(args.registry, symbol, stock, benchmark)
     elif args.command == "activate":
         result = activate_run(args.registry, args.run_id)
+    elif args.command == "import-registry":
+        from database.session import configured_database_url
+        if not configured_database_url():
+            parser.error("DATABASE_URL is required for registry import")
+        for path in args.registry.glob("*/manifest.json"):
+            register_manifest(json.loads(path.read_text(encoding="utf-8")), path.parent)
+        result = {"status": "imported"}
     else:
         result = {"runs": [json.loads(path.read_text(encoding="utf-8")) for path in args.registry.glob("*/manifest.json")],
-                  "active": json.loads((args.registry / "active.json").read_text(encoding="utf-8")) if (args.registry / "active.json").exists() else {}}
+                  "active": active_models(args.registry)}
     print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
 
 

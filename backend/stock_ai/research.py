@@ -18,6 +18,7 @@ from .backtesting import BacktestConfig, ThresholdBacktester
 from .contracts import adjusted_bars, adjusted_price, dataset_version, normalize_bars
 from .excess_returns import MultiHorizonExcessReturnForecaster
 from .ml_features import FEATURE_NAMES
+from .registry import register_manifest, manifest_for, active_models, select_model
 
 
 def write_json(path: Path, value):
@@ -115,6 +116,7 @@ def train_run(root: Path, symbol: str, stock, benchmark):
                         "Repeated experiments require a separate untouched holdout.",
                         "Predictive-error gate does not establish profitable portfolio returns."]}
     write_json(directory / "manifest.json", manifest)
+    register_manifest(manifest, directory)
     return manifest
 
 
@@ -122,7 +124,7 @@ def read_run(root, run_id):
     if not re.fullmatch(r"[0-9a-f]{32}", run_id):
         raise ValueError("invalid run id")
     directory = root / run_id
-    manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    manifest = manifest_for(run_id) or json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
     if manifest["run_id"] != run_id or manifest["schema"] != 1 or manifest["features"] != list(FEATURE_NAMES):
         raise ValueError("incompatible model manifest")
     return directory, manifest
@@ -134,14 +136,7 @@ def activate_run(root, run_id):
         raise ValueError("model failed the sample-out-of-training gate")
     if sha256((directory / "model.pkl").read_bytes()).hexdigest() != manifest["artifact_sha256"]:
         raise ValueError("model artifact checksum mismatch")
-    active_path = root / "active.json"
-    active = json.loads(active_path.read_text(encoding="utf-8")) if active_path.exists() else {}
-    previous = active.get(manifest["symbol"])
-    active[manifest["symbol"]] = run_id
-    write_json(root / "activations" / (uuid4().hex + ".json"), {
-        "at": datetime.now(timezone.utc).isoformat(), "symbol": manifest["symbol"], "previous": previous, "run_id": run_id})
-    write_json(active_path, active)
-    return {"symbol": manifest["symbol"], "run_id": run_id, "previous": previous}
+    return select_model(root, manifest["symbol"], run_id, "research validation gate passed")
 
 
 def score_archived_predictions(root, symbol, stock, benchmark):
@@ -197,7 +192,7 @@ def score_archived_predictions(root, symbol, stock, benchmark):
 def registered_prediction(root: Path, symbol, stock, benchmark):
     import sklearn
 
-    active = json.loads((root / "active.json").read_text(encoding="utf-8"))
+    active = active_models(root)
     run_id = active.get(symbol)
     if run_id is None:
         raise ValueError("no active model for symbol")

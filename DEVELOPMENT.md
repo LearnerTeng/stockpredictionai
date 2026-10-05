@@ -71,7 +71,7 @@ do not need special SPA fallback rules.
 ## Verify
 
 ```powershell
-python -m unittest discover -s backend/tests -v
+python backend/scripts/run_checks.py
 npm run typecheck
 npm run build
 npm audit --omit=dev
@@ -146,8 +146,17 @@ npm audit --omit=dev
 - The recommendation score is deterministic; an LLM only explains model output.
 
 Before real trading, validate broker sandbox adapters, immutable external audit
-storage, exchange calendars, live price freshness, partial fills and reconciliation.
+storage, calendar updates, live price freshness, partial fills and external reconciliation.
 The local API access gate and paper halt control below are not broker risk controls.
+
+## Quant platform foundations (2026-10-04)
+
+See [the operating guide](docs/quant-platform.md) for point-in-time observations,
+security-master imports, multi-asset portfolio replay, database-authoritative model
+selection, forward monitoring and the SQL paper execution ledger. These are research
+foundations with explicit limitations, not live-trading certification. The frontend
+now builds only the React workbench, including image history, and uses ECharts for
+both candles and portfolio charts. The legacy SQLite path remains for migration.
 
 
 ## Quant integrity and paper execution hardening (2026-09-06)

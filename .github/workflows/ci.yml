@@ -30,7 +30,7 @@ jobs:
       - run: python -m alembic upgrade head
         env:
           DATABASE_URL: ${{ env.TEST_POSTGRES_URL }}
-      - run: python -m unittest discover -s backend/tests -v
+      - run: python backend/scripts/run_checks.py
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build

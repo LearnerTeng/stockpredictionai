@@ -38,10 +38,8 @@ def _next_trading_day(value: Any) -> str:
         current = date.fromisoformat(str(value))
     except ValueError:
         return f"proj{value}"
-    next_day = current + timedelta(days=1)
-    while next_day.weekday() >= 5:
-        next_day += timedelta(days=1)
-    return next_day.isoformat()
+    from market_data.calendar import next_session
+    return next_session(current).isoformat()
 
 
 class GradientBoostedForecaster:

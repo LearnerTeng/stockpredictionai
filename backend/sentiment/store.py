@@ -27,6 +27,7 @@ from database.models import (
 from database.session import create_database_engine, session_factory
 from market_data.store import normalize_symbol
 from sentiment.providers import PRIMARY_DOMAINS, utc_now
+from market_data.calendar import available_session, session_close
 
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -65,20 +66,12 @@ MARKET_CLOCKS = {
 
 
 def news_trade_date(published_at: datetime, market: str) -> date:
-    """Assign news to the first weekday close at which it can be acted on."""
-    zone, close_time = MARKET_CLOCKS.get(market, MARKET_CLOCKS["US"])
-    local = (_aware(published_at) or published_at.replace(tzinfo=timezone.utc)).astimezone(zone)
-    trade_day = local.date()
-    if local.time().replace(tzinfo=None) > close_time:
-        trade_day += timedelta(days=1)
-    while trade_day.weekday() >= 5:
-        trade_day += timedelta(days=1)
-    return trade_day
+    """First exchange close at which news is available, including early closes."""
+    return available_session(_aware(published_at), market)
 
 
 def _market_close_utc(trade_day: date, market: str) -> datetime:
-    zone, close_time = MARKET_CLOCKS.get(market, MARKET_CLOCKS["US"])
-    return datetime.combine(trade_day, close_time, zone).astimezone(timezone.utc)
+    return session_close(trade_day, market)
 
 
 class SentimentStore:

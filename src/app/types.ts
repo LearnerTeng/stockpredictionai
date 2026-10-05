@@ -382,6 +382,10 @@ export interface CorrelationMatrix {
 }
 
 export interface RiskMetric {
+  var_95_pct: number | null
+  es_95_pct: number | null
+  beta: number | null
+  tracking_error_pct: number | null
   annualized_vol_pct: number | null
   sharpe: number | null
   max_drawdown_pct: number | null

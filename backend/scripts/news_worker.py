@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
@@ -48,11 +49,11 @@ def main() -> None:
             try:
                 service.send_daily_digest()
             except Exception:
-                pass
+                logging.exception("Daily sentiment digest failed")
         try:
             service.retry_failed_alerts()
         except Exception:
-            pass
+            logging.exception("Sentiment alert retry failed")
         if args.once:
             return
         sleep(max(args.poll_seconds, 5.0))

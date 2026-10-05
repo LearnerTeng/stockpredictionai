@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from typing import Any
 
 from .features import TechnicalFeatureEngineer
@@ -167,11 +167,13 @@ def _normalize_bar(bar: dict[str, Any], symbol: str, projected: bool = False) ->
 
 
 def _build_projected_bars(symbol: str, last_bar: dict[str, Any], predictions: list[float]) -> list[dict[str, Any]]:
+    from market_data.store import infer_market
+
     bars: list[dict[str, Any]] = []
     previous_close = float(last_bar["close"])
     current_date = date.fromisoformat(last_bar["trade_date"])
     for prediction in predictions:
-        current_date = _next_trading_day(current_date)
+        current_date = _next_trading_day(current_date, infer_market(symbol))
         close = max(float(prediction), 0.01)
         high = max(previous_close, close) * 1.006
         low = min(previous_close, close) * 0.994
@@ -191,11 +193,9 @@ def _build_projected_bars(symbol: str, last_bar: dict[str, Any], predictions: li
     return bars
 
 
-def _next_trading_day(value: date) -> date:
-    next_day = value + timedelta(days=1)
-    while next_day.weekday() >= 5:
-        next_day += timedelta(days=1)
-    return next_day
+def _next_trading_day(value: date, market: str = "US") -> date:
+    from market_data.calendar import next_session
+    return next_session(value, market)
 
 
 def _build_scenario(

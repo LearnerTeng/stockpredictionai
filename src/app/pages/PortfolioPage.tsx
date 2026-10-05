@@ -93,6 +93,9 @@ export function PortfolioPage() {
             <div><span>{t('risk.maxDrawdown')}</span><strong>{riskData.portfolio?.max_drawdown_pct != null ? `${riskData.portfolio.max_drawdown_pct}%` : '—'}</strong></div>
             <div><span>{t('risk.hhi')}</span><strong>{riskData.portfolio?.hhi ?? '—'}</strong></div>
             <div><span>{t('risk.effectiveN')}</span><strong>{riskData.portfolio?.effective_n ?? '—'}</strong></div>
+            <div><span>VaR 95% · 1d</span><strong>{riskData.portfolio?.var_95_pct != null ? `${riskData.portfolio.var_95_pct}%` : '—'}</strong></div>
+            <div><span>ES 95% · 1d</span><strong>{riskData.portfolio?.es_95_pct != null ? `${riskData.portfolio.es_95_pct}%` : '—'}</strong></div>
+            <div><span>Beta</span><strong>{riskData.portfolio?.beta ?? '—'}</strong></div>
           </div>
           <div className="dashboard-grid equal-grid">
             {riskData.correlation_matrix && (

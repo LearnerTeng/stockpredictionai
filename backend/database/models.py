@@ -349,3 +349,76 @@ class AppSetting(Base):
     key: Mapped[str] = mapped_column(String(128), primary_key=True)
     value_json: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Security(Base):
+    __tablename__ = "securities"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    market: Mapped[str] = mapped_column(String(16))
+    currency: Mapped[str] = mapped_column(String(8))
+    provisional: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class SecurityAlias(Base):
+    __tablename__ = "security_aliases"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    security_id: Mapped[str] = mapped_column(ForeignKey("securities.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    valid_from: Mapped[date] = mapped_column(Date)
+    valid_to: Mapped[date | None] = mapped_column(Date)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class UniverseMembership(Base):
+    __tablename__ = "universe_memberships"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    universe: Mapped[str] = mapped_column(String(64), index=True)
+    security_id: Mapped[str] = mapped_column(ForeignKey("securities.id"))
+    valid_from: Mapped[date] = mapped_column(Date)
+    valid_to: Mapped[date | None] = mapped_column(Date)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class BarRevision(Base):
+    __tablename__ = "bar_revisions"
+    __table_args__ = (UniqueConstraint("security_id", "trade_date", "source", "revision", name="uq_bar_revision"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    security_id: Mapped[str] = mapped_column(ForeignKey("securities.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    trade_date: Mapped[date] = mapped_column(Date, index=True)
+    source: Mapped[str] = mapped_column(String(64))
+    revision: Mapped[int] = mapped_column(Integer)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    quality_status: Mapped[str] = mapped_column(String(32))
+    checksum: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class ExecutionEvent(Base):
+    __tablename__ = "execution_events"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("paper_orders.id"), index=True)
+    status: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class Fill(Base):
+    __tablename__ = "fills"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("paper_orders.id"), unique=True)
+    quantity: Mapped[float] = mapped_column(Float)
+    price: Mapped[float] = mapped_column(Float)
+    fee: Mapped[float] = mapped_column(Float)
+    executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class CashEntry(Base):
+    __tablename__ = "cash_ledger"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    portfolio_id: Mapped[str] = mapped_column(ForeignKey("portfolios.id"), index=True)
+    fill_id: Mapped[str | None] = mapped_column(ForeignKey("fills.id"), unique=True)
+    amount: Mapped[float] = mapped_column(Float)
+    kind: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

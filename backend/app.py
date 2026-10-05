@@ -28,13 +28,7 @@ from database.session import configured_database_url
 from sentiment.mailer import SmtpMailer
 from sentiment.service import NewsIngestionService
 from sentiment.store import SentimentStore
-from stock_ai.data import DEFAULT_RANGE_OPTIONS, list_value as stock_list_value
-from stock_ai.features import (
-    ema as stock_ema,
-    fourier_trend as stock_fourier_trend,
-    rsi as stock_rsi,
-    sma as stock_sma,
-)
+from stock_ai.data import DEFAULT_RANGE_OPTIONS
 from stock_ai.ml_models import create_forecaster
 from stock_ai.models import StatisticalForecaster
 from stock_ai.pipeline import PredictionRequest, StockAiPipeline
@@ -322,44 +316,12 @@ def _parse_analysis_request(payload: dict[str, Any]) -> AnalyzeRequest:
     )
 
 
-def _fetch_prices(symbol: str) -> list[float]:
-    return stock_ai_pipeline.market_data.fetch_prices(symbol)
-
-
 def _fetch_yahoo_bars(symbol: str, range_value: str = "1y") -> list[dict[str, Any]]:
     return stock_ai_pipeline.market_data.fetch_daily_bars(symbol, range_value)
 
 
-def _list_value(values: Any, index: int) -> Any:
-    return stock_list_value(values, index)
-
-
-def _sma(values: list[float], window: int) -> float | None:
-    return stock_sma(values, window)
-
-
-def _ema(values: list[float], window: int) -> float | None:
-    return stock_ema(values, window)
-
-
-def _rsi(values: list[float], window: int = 14) -> float | None:
-    return stock_rsi(values, window)
-
-
-def _fourier_trend(values: list[float]) -> dict[str, Any]:
-    return stock_fourier_trend(values)
-
-
 def _build_monitor_signal(symbol: str, bars: list[dict[str, Any]]) -> dict[str, Any]:
     return stock_ai_pipeline.build_signal(symbol, bars)
-
-
-def _predict_next(window: list[float]) -> float:
-    return stock_ai_pipeline.forecaster.predict_next(window)
-
-
-def _forecast_series(series: list[float], history_window: int, forecast_steps: int) -> list[float]:
-    return stock_ai_pipeline.forecaster.forecast_series(series, history_window, forecast_steps)
 
 
 @app.get("/health")

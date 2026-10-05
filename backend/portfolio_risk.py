@@ -88,6 +88,8 @@ class PortfolioRiskService:
         equity = float(portfolio["equity"]) or 1.0
         series: dict[str, dict[str, float]] = {}
         warnings: list[str] = []
+        if any(p.get("currency", portfolio.get("currency", "USD")) != portfolio.get("currency", "USD") for p in positions):
+            warnings.append("Currency exposures are indicative: historical FX returns and FX stress are not modeled.")
         for position in positions:
             symbol = position["symbol"]
             bars = self.market_store.list_daily_bars(symbol, window)
@@ -175,6 +177,24 @@ class PortfolioRiskService:
         )
 
         hhi = sum(weight**2 for weight in weights.values())
+        losses = sorted(-value for value in portfolio_returns)
+        var_95 = losses[min(len(losses)-1, int(len(losses)*.95))]
+        es_95 = mean(value for value in losses if value >= var_95)
+        exposures = {}
+        for position in positions:
+            currency = position.get("currency") or portfolio.get("currency", "USD")
+            exposures[currency] = exposures.get(currency, 0) + float(position["market_value"]) / equity * 100
+        covered = sum(weights.values())
+        if covered < (float(portfolio.get("market_value", equity)) / equity) - .001:
+            warnings.append("Risk metrics cover only positions with usable history; uncovered risk is NOT zero.")
+        benchmark_bars = self.market_store.list_daily_bars(portfolio.get("benchmark_symbol") or "SPY", window)
+        benchmark_map = {bar["trade_date"]: adjusted_price(bar) for bar in benchmark_bars}
+        beta = tracking_error = None
+        if all(day in benchmark_map for day in common_dates):
+            benchmark_returns = [benchmark_map[b] / benchmark_map[a] - 1 for a, b in zip(common_dates, common_dates[1:])]
+            variance = _covariance(benchmark_returns, benchmark_returns)
+            beta = _covariance(portfolio_returns, benchmark_returns) / variance if variance > 0 else None
+            tracking_error = pstdev([a-b for a, b in zip(portfolio_returns, benchmark_returns)]) * sqrt(TRADING_DAYS) * 100
 
         # Portfolio-level Sharpe and drawdown come from the persisted performance
         # curve when available.
@@ -202,6 +222,10 @@ class PortfolioRiskService:
                 "values": [[round(value, 3) if value is not None else 0.0 for value in row] for row in correlation],
             },
             "portfolio": {
+                "var_95_pct": round(max(0, var_95) * 100, 3),
+                "es_95_pct": round(max(0, es_95) * 100, 3),
+                "beta": round(beta, 3) if beta is not None else None,
+                "tracking_error_pct": round(tracking_error, 3) if tracking_error is not None else None,
                 "annualized_vol_pct": round(portfolio_volatility * 100, 2) if portfolio_volatility is not None else None,
                 "sharpe": round(sharpe, 2) if sharpe is not None else None,
                 "max_drawdown_pct": round(max_drawdown_pct, 2) if max_drawdown_pct is not None else None,
@@ -209,6 +233,9 @@ class PortfolioRiskService:
                 "effective_n": round(1.0 / hhi, 2) if hhi > 0 else None,
             },
             "suggested_weights": suggested_weights,
+            "currency_exposure_pct": exposures,
+            "stress_scenarios": [{"name": "covered-equities-minus-20pct", "portfolio_loss_pct": round(covered * 20, 2),
+                                  "covered_equity_pct": round(covered * 100, 2)}],
             "contributions": contributions,
             "warnings": warnings,
         }

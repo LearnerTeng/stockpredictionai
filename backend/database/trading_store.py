@@ -12,6 +12,7 @@ from trading.policy import parse_order, same_request, reference_price, evaluate_
 from trading.store import DEFAULT_PORTFOLIO_ID, normalize_symbol
 from .models import AppSetting, PaperOrder, PerformancePoint, Portfolio, Position, Recommendation, StockPreference
 from .session import create_database_engine, session_factory
+from trading.ledger import append_event, append_fill
 
 
 def _now() -> datetime:
@@ -299,6 +300,7 @@ class SqlAlchemyTradingStore:
                 **order, estimated_price=estimated_price, estimated_notional=estimated_price * order["quantity"],
                 status=status, risk_result_json=json.dumps(risk), created_at=now, updated_at=now)
             session.add(row)
+            append_event(session, row, status)
         return self._order(row)
 
     def cancel_order(self, order_id: str):
@@ -312,6 +314,7 @@ class SqlAlchemyTradingStore:
                 raise ValueError("only pending orders can be cancelled")
             row.status, row.updated_at = "cancelled", _now()
             row.risk_result_json = json.dumps(record_event(json.loads(row.risk_result_json), "cancelled", row.updated_at))
+            append_event(session, row, "cancelled")
         return self._order(row)
 
     def confirm_order(self, order_id: str) -> dict[str, Any]:
@@ -336,6 +339,7 @@ class SqlAlchemyTradingStore:
             risk["events"] = json.loads(order.risk_result_json).get("events", [])
             order.risk_result_json = json.dumps(record_event(risk, "paper_filled", now))
             notional = price * order.quantity
+            opening_cash = portfolio.cash
             if order.side == "buy":
                 if notional > portfolio.cash:
                     raise ValueError("available cash changed before confirmation")
@@ -366,6 +370,7 @@ class SqlAlchemyTradingStore:
             order.filled_price = price
             order.updated_at = now
             order.confirmed_at = now
+            append_fill(session, order, portfolio, opening_cash)
         return self._order(order)
 
     @staticmethod

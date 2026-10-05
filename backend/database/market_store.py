@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 from stock_ai.contracts import normalize_bars
+from market_data.point_in_time import record_bar, bars_as_of
 from uuid import uuid4
 
 from sqlalchemy import func, select, update
@@ -270,6 +271,8 @@ class SqlAlchemyMarketDataStore:
         now = _now()
         dates: list[str] = []
         with self.sessions.begin() as session:
+            if self.engine.dialect.name == "sqlite":
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             instrument = session.get(Instrument, normalized)
             if instrument is None:
                 market = infer_market(normalized)
@@ -285,6 +288,7 @@ class SqlAlchemyMarketDataStore:
                 session.add(instrument)
                 session.flush()
             for item in bars:
+                record_bar(session, normalized, item, source, now, instrument.market)
                 trade_date = datetime.fromisoformat(normalize_trade_date(item.get("date") or item.get("trade_date"))).date()
                 dates.append(trade_date.isoformat())
                 entity = session.scalar(
@@ -332,6 +336,9 @@ class SqlAlchemyMarketDataStore:
             "rows_received": len(bars),
             "trade_dates": dates,
         }
+
+    def list_bars_as_of(self, security_id, as_of, *, source, known_at=None):
+        return bars_as_of(self.sessions, security_id, as_of, source=source, known_at=known_at)
 
     def list_daily_bars(self, symbol: str, limit: int = 60) -> list[dict[str, Any]]:
         normalized = normalize_symbol(symbol)

@@ -90,7 +90,7 @@ class SentimentTests(unittest.TestCase):
 
     def test_news_is_assigned_after_market_close_without_time_leakage(self):
         self.assertEqual(news_trade_date(datetime(2026, 9, 4, 19, 30, tzinfo=timezone.utc), "US").isoformat(), "2026-09-04")
-        self.assertEqual(news_trade_date(datetime(2026, 9, 4, 20, 30, tzinfo=timezone.utc), "US").isoformat(), "2026-09-07")
+        self.assertEqual(news_trade_date(datetime(2026, 9, 4, 20, 30, tzinfo=timezone.utc), "US").isoformat(), "2026-09-08")
         self.assertEqual(news_trade_date(datetime(2026, 9, 4, 6, 0, tzinfo=timezone.utc), "JP").isoformat(), "2026-09-04")
         self.assertEqual(news_trade_date(datetime(2026, 9, 4, 7, 0, tzinfo=timezone.utc), "JP").isoformat(), "2026-09-07")
 
