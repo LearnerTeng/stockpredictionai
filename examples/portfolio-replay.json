@@ -1,0 +1,208 @@
+{
+  "description": "Synthetic engine demonstration, not a real strategy or historical investment result.",
+  "config": {
+    "lookback": 2,
+    "rebalance_sessions": 1,
+    "top_n": 2,
+    "max_weight": 0.3,
+    "max_sector_weight": 0.4
+  },
+  "benchmark": [
+    {
+      "date": "2026-08-31",
+      "open": 100,
+      "close": 100,
+      "adj_close": 100,
+      "volume": 10000,
+      "available_at": "2026-08-31T20:00:00Z"
+    },
+    {
+      "date": "2026-09-01",
+      "open": 100.2,
+      "close": 100.2,
+      "adj_close": 100.2,
+      "volume": 10000,
+      "available_at": "2026-09-01T20:00:00Z"
+    },
+    {
+      "date": "2026-09-02",
+      "open": 100.4,
+      "close": 100.4,
+      "adj_close": 100.4,
+      "volume": 10000,
+      "available_at": "2026-09-02T20:00:00Z"
+    },
+    {
+      "date": "2026-09-03",
+      "open": 100.6,
+      "close": 100.6,
+      "adj_close": 100.6,
+      "volume": 10000,
+      "available_at": "2026-09-03T20:00:00Z"
+    },
+    {
+      "date": "2026-09-04",
+      "open": 100.8,
+      "close": 100.8,
+      "adj_close": 100.8,
+      "volume": 10000,
+      "available_at": "2026-09-04T20:00:00Z"
+    },
+    {
+      "date": "2026-09-08",
+      "open": 101,
+      "close": 101,
+      "adj_close": 101,
+      "volume": 10000,
+      "available_at": "2026-09-08T20:00:00Z"
+    },
+    {
+      "date": "2026-09-09",
+      "open": 101.2,
+      "close": 101.2,
+      "adj_close": 101.2,
+      "volume": 10000,
+      "available_at": "2026-09-09T20:00:00Z"
+    }
+  ],
+  "assets": {
+    "demo-a": {
+      "market": "US",
+      "currency": "USD",
+      "sector": "technology",
+      "bars": [
+        {
+          "date": "2026-08-31",
+          "open": 100,
+          "close": 100,
+          "adj_close": 100,
+          "volume": 10000,
+          "available_at": "2026-08-31T20:00:00Z"
+        },
+        {
+          "date": "2026-09-01",
+          "open": 101,
+          "close": 101,
+          "adj_close": 101,
+          "volume": 10000,
+          "available_at": "2026-09-01T20:00:00Z"
+        },
+        {
+          "date": "2026-09-02",
+          "open": 102,
+          "close": 102,
+          "adj_close": 102,
+          "volume": 10000,
+          "available_at": "2026-09-02T20:00:00Z"
+        },
+        {
+          "date": "2026-09-03",
+          "open": 103,
+          "close": 103,
+          "adj_close": 103,
+          "volume": 10000,
+          "available_at": "2026-09-03T20:00:00Z"
+        },
+        {
+          "date": "2026-09-04",
+          "open": 104,
+          "close": 104,
+          "adj_close": 104,
+          "volume": 10000,
+          "available_at": "2026-09-04T20:00:00Z"
+        },
+        {
+          "date": "2026-09-08",
+          "open": 105,
+          "close": 105,
+          "adj_close": 105,
+          "volume": 10000,
+          "available_at": "2026-09-08T20:00:00Z"
+        },
+        {
+          "date": "2026-09-09",
+          "open": 106,
+          "close": 106,
+          "adj_close": 106,
+          "volume": 10000,
+          "available_at": "2026-09-09T20:00:00Z"
+        }
+      ]
+    },
+    "demo-b": {
+      "market": "US",
+      "currency": "USD",
+      "sector": "healthcare",
+      "bars": [
+        {
+          "date": "2026-08-31",
+          "open": 50,
+          "close": 50,
+          "adj_close": 50,
+          "volume": 10000,
+          "available_at": "2026-08-31T20:00:00Z"
+        },
+        {
+          "date": "2026-09-01",
+          "open": 50.3,
+          "close": 50.3,
+          "adj_close": 50.3,
+          "volume": 10000,
+          "available_at": "2026-09-01T20:00:00Z"
+        },
+        {
+          "date": "2026-09-02",
+          "open": 50.6,
+          "close": 50.6,
+          "adj_close": 50.6,
+          "volume": 10000,
+          "available_at": "2026-09-02T20:00:00Z"
+        },
+        {
+          "date": "2026-09-03",
+          "open": 50.9,
+          "close": 50.9,
+          "adj_close": 50.9,
+          "volume": 10000,
+          "available_at": "2026-09-03T20:00:00Z"
+        },
+        {
+          "date": "2026-09-04",
+          "open": 51.2,
+          "close": 51.2,
+          "adj_close": 51.2,
+          "volume": 10000,
+          "available_at": "2026-09-04T20:00:00Z"
+        },
+        {
+          "date": "2026-09-08",
+          "open": 51.5,
+          "close": 51.5,
+          "adj_close": 51.5,
+          "volume": 10000,
+          "available_at": "2026-09-08T20:00:00Z"
+        },
+        {
+          "date": "2026-09-09",
+          "open": 51.8,
+          "close": 51.8,
+          "adj_close": 51.8,
+          "volume": 10000,
+          "available_at": "2026-09-09T20:00:00Z"
+        }
+      ]
+    }
+  },
+  "memberships": [
+    {
+      "security_id": "demo-a",
+      "valid_from": "2026-08-31",
+      "available_at": "2026-08-30T00:00:00Z"
+    },
+    {
+      "security_id": "demo-b",
+      "valid_from": "2026-08-31",
+      "available_at": "2026-08-30T00:00:00Z"
+    }
+  ]
+}

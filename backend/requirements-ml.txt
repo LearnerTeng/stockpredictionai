@@ -1,0 +1,5 @@
+# Optional ML forecaster (gradient-boosted trees + walk-forward validation).
+# The app automatically falls back to the lightweight statistical forecaster
+# when these are not installed, so they are not required for the demo.
+scikit-learn>=1.4,<2.0
+numpy>=1.26
