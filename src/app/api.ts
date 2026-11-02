@@ -1,5 +1,6 @@
 import type {
   AnalysisResult,
+  ResearchAnswer,
   DashboardData,
   IngestionJob,
   MarketCode,
@@ -56,6 +57,11 @@ function queryString(values: Record<string, string | number | undefined>) {
 }
 
 export const api = {
+  researchStatus: () => request<{ documents: number; jobs: Record<string, number>; tokens: number }>('/research/status'),
+  researchAnswer: (query: string, symbol: string, mode: string, language: UiLanguage, asOf?: string) => request<ResearchAnswer>('/research/answer', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, symbol, mode, language, as_of: asOf }),
+  }),
   dashboard: () => request<DashboardData>('/dashboard'),
   recommendations: () => request<{ items: Recommendation[]; data_mode: string }>('/recommendations'),
   recommendation: (symbol: string) => request<Recommendation>(`/recommendations/${encodeURIComponent(symbol)}`),

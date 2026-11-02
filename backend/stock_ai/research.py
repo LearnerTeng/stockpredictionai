@@ -210,6 +210,8 @@ def registered_prediction(root: Path, symbol, stock, benchmark):
     model.allow_training = False
     prediction = model.predict(stock, benchmark)
     prediction["model_run_id"] = run_id
+    prediction["trained_until"] = manifest["trained_until"]
+    prediction["model_available_at"] = manifest["created_at"]
     prediction["validation"] = manifest["validation"]
     prediction["production_eligible"] = False
     return prediction

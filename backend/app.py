@@ -1100,6 +1100,39 @@ def analyze() -> tuple[dict, int]:
         return jsonify({"error": f"AI analysis failed: {err}"}), 502
 
 
+@app.get("/research/status")
+def research_status():
+    from retrieval.store import RetrievalStore
+    try:
+        store, _ = _require_sentiment()
+        return jsonify(RetrievalStore(store.sessions).status()), 200
+    except Exception:
+        return jsonify({"error": "Research database unavailable; check migrations and worker logs"}), 503
+
+
+@app.post("/research/search")
+@app.post("/research/answer")
+def research_query():
+    from retrieval.store import RetrievalStore
+    from retrieval.answers import answer_question
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "JSON object required"}), 400
+    try:
+        source, _ = _require_sentiment()
+        store = RetrievalStore(source.sessions)
+        options = {"symbol": payload.get("symbol"), "as_of": payload.get("as_of"), "mode": payload.get("mode", "hybrid")}
+        if request.path.endswith("/answer"):
+            result = answer_question(store, payload.get("query"), language=payload.get("language", "zh-CN"), **options)
+        else:
+            result = store.search(payload.get("query"), **options)
+        return jsonify(result), 200
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"error": "Invalid research query or unverifiable model response"}), 400
+    except Exception:
+        return jsonify({"error": "Research service unavailable; verify database, API configuration and worker status"}), 503
+
+
 @app.get("/pipeline/architecture")
 def pipeline_architecture() -> tuple[Any, int]:
     return jsonify(

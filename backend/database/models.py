@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import JSON, BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from pgvector.sqlalchemy import Vector
 
 BIGINT_PK = BigInteger().with_variant(Integer, "sqlite")
 
@@ -422,3 +423,61 @@ class CashEntry(Base):
     amount: Mapped[float] = mapped_column(Float)
     kind: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ResearchDocument(Base):
+    __tablename__ = "research_documents"
+    __table_args__ = (UniqueConstraint("article_id", "revision", name="uq_research_revision"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    article_id: Mapped[str] = mapped_column(ForeignKey("news_items.id"), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    checksum: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(Text)
+    body: Mapped[str] = mapped_column(Text)
+    url: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(128))
+    language: Mapped[str | None] = mapped_column(String(16))
+    symbols: Mapped[list] = mapped_column(JSON)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class DocumentEmbedding(Base):
+    __tablename__ = "document_embeddings"
+    __table_args__ = (UniqueConstraint("document_id", "model", name="uq_document_embedding"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(ForeignKey("research_documents.id"), index=True)
+    model: Mapped[str] = mapped_column(String(128))
+    vector: Mapped[list | None] = mapped_column(Vector(1536).with_variant(JSON(), "sqlite"))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    retry_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)
+    token_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class SentimentObservation(Base):
+    __tablename__ = "sentiment_observations"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    relation_id: Mapped[int] = mapped_column(ForeignKey("news_item_instruments.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    article_json: Mapped[dict] = mapped_column(JSON)
+    analysis_json: Mapped[dict] = mapped_column(JSON)
+
+
+class ResearchAnswer(Base):
+    __tablename__ = "research_answers"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    request_json: Mapped[dict] = mapped_column(JSON)
+    response_json: Mapped[dict] = mapped_column(JSON)
+
+
+class PaperCycle(Base):
+    __tablename__ = "paper_cycles"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    dataset_hash: Mapped[str] = mapped_column(String(64))
+    report: Mapped[dict] = mapped_column(JSON)

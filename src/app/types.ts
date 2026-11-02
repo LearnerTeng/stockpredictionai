@@ -393,6 +393,24 @@ export interface RiskMetric {
   effective_n: number | null
 }
 
+export interface ResearchEvidence {
+  id: string
+  title: string
+  text: string
+  url: string | null
+  source: string
+  revision: number
+  available_at: string
+}
+
+export interface ResearchAnswer {
+  id: string
+  status: 'answered' | 'insufficient-evidence' | 'evidence-only'
+  claims: Array<{ text: string; evidence_id: string; quote: string }>
+  evidence: { items: ResearchEvidence[]; as_of: string; mode: string; query_tokens: number }
+  model: string | null
+}
+
 export interface RiskContribution {
   symbol: string
   weight_pct: number

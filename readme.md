@@ -39,6 +39,7 @@ npm run dev
 - React 单入口、ECharts 图表和图像历史浏览。
 
 新能力的命令、数据格式与限制见 [量化基础操作说明](docs/quant-platform.md)。
+pgvector 部署、证据检索、固定评测和本地模拟验收见 [检索与模拟运行手册](docs/retrieval-and-paper.md)。
 完整部署、新闻工作进程和 API 说明见 [开发指南](DEVELOPMENT.md)。
 
 ## 验证

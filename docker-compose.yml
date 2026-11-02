@@ -1,14 +1,14 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:0.8.1-pg17-bookworm
     environment:
       POSTGRES_DB: stockpredictionai
       POSTGRES_USER: stockapp
       POSTGRES_PASSWORD: stockapp_local
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
-      - stockpredictionai_pgdata:/var/lib/postgresql/data
+      - stockpredictionai_pgvector_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U stockapp -d stockpredictionai"]
       interval: 5s
@@ -16,4 +16,5 @@ services:
       retries: 10
 
 volumes:
-  stockpredictionai_pgdata:
+  # Separate from the legacy Alpine volume: restore a logical backup before use.
+  stockpredictionai_pgvector_data:

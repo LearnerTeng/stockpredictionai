@@ -22,7 +22,7 @@ void i18n.use(initReactI18next).init({
   lng: initialLanguage(),
   fallbackLng: 'en',
   defaultNS: 'common',
-  ns: ['common', 'dashboard', 'portfolio', 'trading', 'assistant', 'charts', 'imageLab', 'stock', 'monitor', 'recommendations'],
+  ns: ['common', 'dashboard', 'portfolio', 'trading', 'assistant', 'charts', 'imageLab', 'stock', 'monitor', 'recommendations', 'research'],
   interpolation: { escapeValue: false },
   returnNull: false,
 })

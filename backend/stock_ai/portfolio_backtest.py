@@ -109,6 +109,8 @@ def run_portfolio_backtest(dataset, config=None):
         if index:
             interest = cash * cfg.cash_rate * (date.fromisoformat(day) - date.fromisoformat(days[index-1])).days / 365
             cash += interest
+            if interest:
+                ledger.append({"date": day, "type": "interest", "cash_delta": interest})
         for action in actions.get(day, []):
             sid, value = action["security_id"], float(action["value"])
             if action["type"] == "split":

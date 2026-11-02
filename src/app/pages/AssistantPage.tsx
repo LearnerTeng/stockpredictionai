@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import { PageHeader } from '../components/UI'
+import { ResearchPanel } from '../components/ResearchPanel'
 import type { AnalysisResult, UiLanguage } from '../types'
 
 export function AssistantPage() {
@@ -38,6 +39,7 @@ export function AssistantPage() {
           {result ? <article className="panel analysis-result"><span className="eyebrow">AI ANALYSIS · {result.language}</span><h2>{result.title}</h2><p className="analysis-summary">{result.summary}</p><div className="analysis-sections">{result.sections.map((section) => <section key={section.heading}><h3>{section.heading}</h3><ul>{section.bullets.map((bullet) => <li key={bullet}>{bullet}</li>)}</ul></section>)}</div><footer>{result.disclaimer}</footer></article> : <article className="panel assistant-empty"><Sparkles /><h2>{t('waitingTitle')}</h2><p>{t('waitingText')}</p></article>}
         </div>
       </section>
+      <ResearchPanel />
     </>
   )
 }

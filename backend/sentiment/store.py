@@ -28,6 +28,8 @@ from database.session import create_database_engine, session_factory
 from market_data.store import normalize_symbol
 from sentiment.providers import PRIMARY_DOMAINS, utc_now
 from market_data.calendar import available_session, session_close
+from retrieval.documents import snapshot_news, snapshot_analysis, sentiment_rows_as_of
+from market_data.point_in_time import aware
 
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -52,6 +54,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 def _aware(value: datetime | None) -> datetime | None:
     if value is None:
         return None
+    if isinstance(value, str):
+        return aware(value)
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
@@ -257,7 +261,13 @@ class SentimentStore:
         now = utc_now()
         relation_ids: list[int] = []
         with self.sessions.begin() as session:
-            row = session.scalar(select(NewsItem).where(NewsItem.content_hash == article["content_hash"]))
+            if session.bind.dialect.name == "sqlite":
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            row = session.scalar(select(NewsItem).where(NewsItem.content_hash == article["content_hash"]).with_for_update())
+            if row is None and article.get("provider_item_id"):
+                row = session.scalar(select(NewsItem).where(NewsItem.provider == article["provider"],
+                    NewsItem.provider_item_id == article["provider_item_id"]).order_by(NewsItem.fetched_at.desc()).limit(1).with_for_update())
+            changed = False
             if row is None:
                 row = NewsItem(
                     id=article["id"], symbol=None, title=article["title"], url=article.get("url"), source=article["source"],
@@ -271,7 +281,9 @@ class SentimentStore:
                 session.flush()
             else:
                 row.fetched_at = now
-                if not row.summary and article.get("summary"):
+                changed = row.title != article["title"] or bool(article.get("summary") and row.summary != article["summary"])
+                row.title = article["title"]
+                if article.get("summary"):
                     row.summary = article["summary"]
             for item in article.get("symbols") or []:
                 symbol = normalize_symbol(item["symbol"])
@@ -291,7 +303,10 @@ class SentimentStore:
                     if item.get("provider_sentiment_score") is not None:
                         relation.provider_sentiment_score = float(item["provider_sentiment_score"])
                     relation.updated_at = now
+                    if changed:
+                        relation.analysis_status, relation.sentiment_score, relation.analyzed_at = "pending", None, None
                 relation_ids.append(relation.id)
+            snapshot_news(session, row, now)
         return 1, relation_ids
 
     def pending_relations(self, limit: int = 20, ids: list[int] | None = None) -> list[dict[str, Any]]:
@@ -318,13 +333,16 @@ class SentimentStore:
             "classifier_version", "prompt_version", "analyzed_at",
         }
         with self.sessions.begin() as session:
-            row = session.get(NewsItemInstrument, relation_id)
+            row = session.scalar(select(NewsItemInstrument).where(NewsItemInstrument.id == relation_id).with_for_update())
             if row is None:
                 return
             for key, value in result.items():
                 if key in allowed:
                     setattr(row, key, value)
             row.updated_at = utc_now()
+            if row.analysis_status == "analyzed":
+                row.analyzed_at = row.updated_at
+                snapshot_analysis(session, row, session.get(NewsItem, row.news_item_id), row.updated_at)
 
     def update_coverage(self, provider: str, symbol: str, start: datetime, end: datetime, count: int, error: str | None = None) -> None:
         now = utc_now()
@@ -363,7 +381,7 @@ class SentimentStore:
                 trade_days.update(news_trade_date(article.published_at, market) for _, article in rows)
             for trade_day in sorted(trade_days):
                 as_of = min(_market_close_utc(trade_day, market), now)
-                snapshot = self._snapshot_from_rows(normalized, rows, as_of)
+                snapshot = self.snapshot_as_of(normalized, as_of)
                 values = {
                     "score_1d": snapshot["score_1d"], "score_3d": snapshot["score_3d"], "score_7d": snapshot["score_7d"],
                     "negative_share": snapshot["negative_share"], "dispersion": snapshot["dispersion"],
@@ -382,21 +400,17 @@ class SentimentStore:
                     else:
                         for key, value in values.items():
                             setattr(row, key, value)
-            results[normalized] = self._snapshot_from_rows(normalized, rows, now)
+            results[normalized] = self.snapshot_as_of(normalized, now)
         return results
 
     def snapshot(self, symbol: str, hours: int = 24 * 7) -> dict[str, Any]:
-        normalized = normalize_symbol(symbol)
-        now = utc_now()
-        with self.sessions() as session:
-            rows = session.execute(select(NewsItemInstrument, NewsItem).join(
-                NewsItem, NewsItem.id == NewsItemInstrument.news_item_id,
-            ).where(
-                NewsItemInstrument.symbol == normalized,
-                NewsItemInstrument.analysis_status == "analyzed",
-                NewsItem.published_at >= now - timedelta(hours=hours),
-            ).order_by(NewsItem.published_at.desc())).all()
+        return self.snapshot_as_of(symbol, utc_now(), hours)
 
+    def snapshot_as_of(self, symbol: str, cutoff, hours: int = 24 * 7) -> dict[str, Any]:
+        normalized = normalize_symbol(symbol)
+        now = aware(cutoff)
+        rows = [(r, a) for r, a in sentiment_rows_as_of(self.sessions, normalized, now)
+                if _aware(a.published_at) >= now - timedelta(hours=hours)]
         return self._snapshot_from_rows(normalized, rows, now)
 
     @staticmethod
@@ -408,6 +422,9 @@ class SentimentStore:
         known_rows = [
             (relation, article) for relation, article in rows
             if (_aware(article.published_at) or as_of) <= as_of
+            and (_aware(getattr(article, "first_fetched_at", None)) or as_of) <= as_of
+            and (_aware(getattr(relation, "analyzed_at", None)) or as_of) <= as_of
+            and (_aware(getattr(relation, "created_at", None)) or as_of) <= as_of
         ]
 
         def aggregate(window_hours: int) -> tuple[float | None, list[tuple[NewsItemInstrument, NewsItem]]]:

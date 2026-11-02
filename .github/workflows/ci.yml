@@ -5,7 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: pgvector/pgvector:0.8.1-pg17-bookworm
         env:
           POSTGRES_DB: quant_test
           POSTGRES_USER: quant_test
@@ -31,6 +31,9 @@ jobs:
         env:
           DATABASE_URL: ${{ env.TEST_POSTGRES_URL }}
       - run: python backend/scripts/run_checks.py
+      - run: python backend/scripts/retrieval_eval.py examples/retrieval-eval.json
+        env:
+          RETRIEVAL_EVAL_DATABASE_URL: ${{ env.TEST_POSTGRES_URL }}
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
