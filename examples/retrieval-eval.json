@@ -1,0 +1,27 @@
+{
+  "version": "synthetic-smoke-v1",
+  "description": "Synthetic retrieval plumbing fixture, NOT a financial-quality or investment-performance benchmark. Replace with manually judged licensed news before model selection.",
+  "documents": [
+    {"id": "earnings", "text": "Apple earnings report: quarterly revenue increased while operating margin declined."},
+    {"id": "recall", "text": "Automaker announces a vehicle recall after a battery safety investigation."},
+    {"id": "rates", "text": "Central bank leaves interest rates unchanged and warns about inflation."},
+    {"id": "chips", "text": "Semiconductor supplier expands chip production capacity next year."},
+    {"id": "dividend", "text": "Utility board approves a cash dividend payable in December."},
+    {"id": "guidance", "text": "Retail company lowers sales guidance because consumer demand weakened."},
+    {"id": "zh", "text": "公司公告：本季度营业收入增长，但毛利率下降。"},
+    {"id": "ja", "text": "決算発表：売上高は増加したが、営業利益率は低下した。"}
+  ],
+  "queries": [
+    {"query": "Apple earnings", "relevant": ["earnings"]},
+    {"query": "vehicle recall", "relevant": ["recall"]},
+    {"query": "interest rates", "relevant": ["rates"]},
+    {"query": "chip production", "relevant": ["chips"]},
+    {"query": "cash dividend", "relevant": ["dividend"]},
+    {"query": "sales guidance", "relevant": ["guidance"]},
+    {"query": "营业收入", "relevant": ["zh"]},
+    {"query": "営業利益率", "relevant": ["ja"]},
+    {"query": "earnings report revenue", "relevant": ["earnings"]},
+    {"query": "battery safety", "relevant": ["recall"]},
+    {"query": "quantum teleportation experiment", "relevant": []}
+  ]
+}

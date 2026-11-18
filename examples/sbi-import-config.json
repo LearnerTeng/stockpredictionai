@@ -1,0 +1,14 @@
+{
+  "snapshot_through": "2026-11-10",
+  "holdings_confirmed_through": "2026-11-10",
+  "nav_drop_pct": 5,
+  "funds": [
+    {
+      "sbi_name": "合成インデックス投信",
+      "sbi_bucket": "NISA（成長）",
+      "symbol": "SYNTH-FUND",
+      "position_bucket": "growth",
+      "news_symbols": ["SPY"]
+    }
+  ]
+}
