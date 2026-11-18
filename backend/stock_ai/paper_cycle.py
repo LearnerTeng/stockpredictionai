@@ -88,8 +88,12 @@ def archived_signals(root, assets, horizon=5):
 
 
 def reconcile_portfolio(dataset, result):
-    cash = result['config']['initial_cash']
-    shares = {sid: 0.0 for sid in dataset['assets']}
+    # 对账使用与回测一致的期初持仓和首日开盘估值。
+    # Reconcile from the same opening holdings and first-session valuation as the backtest.
+    shares = {sid: float(dataset.get('initial_holdings', {}).get(sid, 0)) for sid in dataset['assets']}
+    first = result['equity_curve'][0]['date']
+    cash = result['config']['initial_cash'] - sum(q * float(next(r for r in dataset['assets'][sid]['bars']
+        if (r.get('trade_date') or r['date']) == first)['open']) for sid, q in shares.items() if q)
     prices = {sid: {r.get('trade_date') or r['date']: float(r['close']) for r in asset['bars']}
               for sid, asset in dataset['assets'].items()}
     for row in result['equity_curve']:

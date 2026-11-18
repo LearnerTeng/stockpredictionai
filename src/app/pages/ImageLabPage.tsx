@@ -6,7 +6,7 @@ import { api, API_BASE } from '../api'
 import { PageHeader } from '../components/UI'
 
 export function ImageLabPage() {
-  const { t } = useTranslation('imageLab')
+  const { t, i18n } = useTranslation('imageLab')
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
   const [algorithm, setAlgorithm] = useState('baseline-inspector')
@@ -15,7 +15,13 @@ export function ImageLabPage() {
   const client = useQueryClient()
   const history = useQuery({ queryKey: ['image-history', page], queryFn: () => api.imageHistory(page) })
   const detail = useQuery({ queryKey: ['image-job', selected], queryFn: () => api.imageJob(selected!), enabled: !!selected })
-  const analyze = useMutation({ mutationFn: () => api.analyzeImage(file!, algorithm),
+  const analyze = useMutation({ mutationFn: async () => {
+    if (algorithm !== 'nvidia-vision') return api.analyzeImage(file!, algorithm)
+    const body = new FormData(); body.append('file', file!); body.append('language', i18n.resolvedLanguage || 'zh-CN')
+    const response = await fetch(API_BASE + '/ai/vision', {method:'POST',body}); const data = await response.json()
+    if (!response.ok) throw new Error(data.error)
+    return data
+  },
     onSuccess: () => client.invalidateQueries({ queryKey: ['image-history'] }) })
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview) }, [preview])
   const choose = (selected: File | null) => {
@@ -31,7 +37,7 @@ export function ImageLabPage() {
       <section className="image-lab-grid">
         <article className="panel upload-panel">
           <select aria-label={t('algorithm')} value={algorithm} onChange={e => setAlgorithm(e.target.value)}>
-            <option value="baseline-inspector">Baseline Inspector</option><option value="chart-vision-lite">Chart Vision Lite</option><option value="edge-focus">Edge Focus</option>
+            <option value="nvidia-vision">NVIDIA Super VL · Public charts</option><option value="baseline-inspector">Baseline Inspector</option><option value="chart-vision-lite">Chart Vision Lite</option><option value="edge-focus">Edge Focus</option>
           </select>
           <label className="drop-zone"><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => choose(event.target.files?.[0] ?? null)} />{preview ? <img src={preview} alt={t('previewAlt')} /> : <><Upload /><strong>{t('choose')}</strong><span>{t('chooseHint')}</span></>}</label>
           <button className="primary-button full-button" disabled={!file || analyze.isPending} onClick={() => analyze.mutate()}><ScanSearch size={17} />{analyze.isPending ? t('analyzing') : t('analyze')}</button>

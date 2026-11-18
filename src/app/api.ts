@@ -1,4 +1,6 @@
 import type {
+  RuntimeStatus, SbiStatus, SbiReturns, SbiFundHistory, SentimentEvaluation, SentimentEvaluationInput,
+  NewsLine, NewsLineStatus, NewsComparison,
   AnalysisResult,
   ResearchAnswer,
   DashboardData,
@@ -57,6 +59,25 @@ function queryString(values: Record<string, string | number | undefined>) {
 }
 
 export const api = {
+  runtimeStatus: () => request<RuntimeStatus>('/runtime/status'),
+  sbiStatus: (id: string) => request<SbiStatus>(`/portfolio/sbi${queryString({id})}`),
+  sbiReturns: (id: string) => request<SbiReturns>(`/portfolio/sbi/returns${queryString({id})}`),
+  sbiFundHistory: (id: string, code: string) => request<SbiFundHistory>(`/portfolio/sbi/returns${queryString({id, code})}`),
+  importSbiReturns: (id: string, form: FormData) => request<{as_of: string; funds: number; return_jpy: number; value: number}>(
+    `/portfolio/sbi/returns${queryString({id})}`, {method: 'POST', body: form},
+  ),
+  resolveSbiImport: (id: string, fileId: string, fingerprint: string, additions: Record<string, number>) =>
+    request<{status: string}>(`/portfolio/sbi${queryString({id})}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: fileId, fingerprint, additions}),
+    }),
+  lastSentimentEvaluation: () => request<{report: SentimentEvaluation | null}>('/sentiment/lines/evaluation'),
+  evaluateSentiment: (input: SentimentEvaluationInput) => request<SentimentEvaluation>('/sentiment/lines/evaluation', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(input),
+  }),
+  newsLines: () => request<NewsLineStatus>('/sentiment/lines'),
+  newsHoldingSnapshot: (portfolioId: string) => request<{as_of: string; portfolio: Portfolio}>(`/sentiment/lines/holdings${queryString({portfolio_id: portfolioId})}`),
+  enableNewsLines: (lines: NewsLine[]) => request<{ queued: number }>('/sentiment/lines', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({lines})}),
+  compareNewsLines: (payload: unknown) => request<NewsComparison>('/sentiment/lines/compare', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)}),
   researchStatus: () => request<{ documents: number; jobs: Record<string, number>; tokens: number }>('/research/status'),
   researchAnswer: (query: string, symbol: string, mode: string, language: UiLanguage, asOf?: string) => request<ResearchAnswer>('/research/answer', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },

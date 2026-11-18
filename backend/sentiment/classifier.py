@@ -12,8 +12,9 @@ EVENT_TYPES = ["earnings", "guidance", "merger_acquisition", "regulatory", "macr
 
 class StructuredSentimentClassifier:
     def __init__(self, api_key: str | None = None, model: str | None = None):
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "").strip()
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-5-mini")
+        from llm_gateway import configuration
+        self.api_key = api_key if api_key is not None else configuration('sentiment')['key']
+        self.model = model or configuration('sentiment')['model']
 
     def classify(self, article: dict[str, Any], symbol: str, company_name: str | None, provider_score: float | None) -> dict[str, Any]:
         if provider_score is not None:
@@ -25,12 +26,11 @@ class StructuredSentimentClassifier:
         if not self.api_key:
             return {"analysis_status": "pending", "classifier": None, "prompt_version": PROMPT_VERSION}
 
-        from openai import OpenAI
-
-        client = OpenAI(api_key=self.api_key)
+        from llm_gateway import structured_client
+        client = structured_client('sentiment', self.api_key)
         prompt = (
             "Classify this financial news only for its likely short-term impact on the named stock. "
-            "Do not infer facts absent from the headline or summary. Return calibrated probabilities.\n"
+            "Do not infer facts absent from the headline or summary. Return uncalibrated classification scores, not price probabilities.\n"
             f"Symbol: {symbol}\nCompany: {company_name or symbol}\nSource: {article.get('source')}\n"
             f"Headline: {article.get('title')}\nSummary: {article.get('summary') or ''}"
         )

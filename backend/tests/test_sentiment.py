@@ -74,6 +74,23 @@ class SentimentTests(unittest.TestCase):
         self.store.engine.dispose()
         self.temp.cleanup()
 
+    def test_gdelt_groups_or_terms_and_paces_successive_requests(self):
+        from urllib.parse import parse_qs, urlsplit
+        from unittest.mock import Mock, patch
+        from sentiment.providers import GdeltNewsProvider
+
+        http = Mock()
+        http.get.return_value = {"articles": []}
+        provider = GdeltNewsProvider(http)
+        now = datetime(2026, 11, 13, tzinfo=timezone.utc)
+        with patch('sentiment.providers.monotonic', side_effect=[10, 10, 11, 15.5]),                 patch('sentiment.providers.sleep') as sleep:
+            provider.fetch("AAPL", "Apple", now, now)
+            provider.fetch("MSFT", None, now, now)
+        first, second = [parse_qs(urlsplit(call.args[0]).query)['query'][0] for call in http.get.call_args_list]
+        self.assertEqual(first, '("Apple" OR "AAPL")')
+        self.assertEqual(second, '"MSFT"')
+        sleep.assert_called_once_with(4.5)
+
     def test_url_canonicalization_removes_tracking_parameters(self):
         self.assertEqual(
             canonicalize_url("https://www.reuters.com/a/?utm_source=x&id=2#section"),

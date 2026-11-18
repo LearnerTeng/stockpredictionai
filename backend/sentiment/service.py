@@ -80,12 +80,10 @@ class NewsIngestionService:
         return self.store.create_job(requested, mode, selected_markets)
 
     def run(self, job_id: str) -> dict[str, Any]:
-        job = self.store.job(job_id)
-        if job["status"] in TERMINAL_STATUSES:
-            return job
         with self.store.worker_lock() as acquired:
-            if not acquired:
-                return self.store.update_job(job_id, status="retrying", notes="Another sentiment worker owns the database lock")
+            job = self.store.job(job_id)
+            if not acquired or job["status"] in TERMINAL_STATUSES:
+                return job
             return self._run_locked(job)
 
     def _run_locked(self, job: dict[str, Any]) -> dict[str, Any]:

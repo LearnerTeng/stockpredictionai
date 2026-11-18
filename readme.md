@@ -40,6 +40,7 @@ npm run dev
 
 新能力的命令、数据格式与限制见 [量化基础操作说明](docs/quant-platform.md)。
 pgvector 部署、证据检索、固定评测和本地模拟验收见 [检索与模拟运行手册](docs/retrieval-and-paper.md)。
+独立模型分析和四条可选择的回放曲线见 [新闻模型模拟线](docs/news-model-lines.md)。
 完整部署、新闻工作进程和 API 说明见 [开发指南](DEVELOPMENT.md)。
 
 ## 验证
@@ -52,3 +53,12 @@ npm run build
 
 测试脚本隔离本地账户、数据库与模型目录；PostgreSQL 集成测试需单独设置专用 `TEST_POSTGRES_URL`，否则跳过。
 原始 GAN 教学 notebook 仍作为历史研究资料保留，不代表当前在线模型架构。
+
+## NVIDIA 多模型建议
+
+配置 NVIDIA_API_KEY 并完成数据库迁移后，可运行 `npm run start:all` 统一启动。
+AI 助手中可启用每分钟变化检查、设置配额和仓位上限。详见 [运行与验收说明](docs/nvidia-advice.md)。
+
+### SBI and background workflows
+
+See [SBI imports, advice replay, Windows login and sentiment evaluation](docs/sbi-background-research.md) for setup and operation.

@@ -28,6 +28,10 @@ def write_json(path: Path, value):
     os.replace(temporary, path)
 
 
+def evaluation_cuts(length, first, horizon, folds=12):
+    return list(range(first, length - horizon, horizon))[-folds:]
+
+
 def evaluate_excess(stock, benchmark, folds=12):
     """Expanding folds: each label is realized AFTER the corresponding fit cutoff.
 
@@ -37,7 +41,7 @@ def evaluate_excess(stock, benchmark, folds=12):
     benchmark_map = {str(b.get("trade_date") or b.get("date")): adjusted_price(b) for b in normalize_bars(benchmark)}
     stock = [b for b in adjusted_bars(stock) if str(b.get("trade_date") or b.get("date")) in benchmark_map]
     first = 221
-    cuts = list(range(first, len(stock) - 20, 20))[-folds:]
+    cuts = evaluation_cuts(len(stock), first, 20, folds)
     if len(cuts) < 3:
         raise ValueError("at least 282 aligned bars are required for three evaluation folds")
     observations = {5: [], 20: []}

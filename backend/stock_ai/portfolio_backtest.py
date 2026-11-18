@@ -99,8 +99,16 @@ def run_portfolio_backtest(dataset, config=None):
             close = session_close(date.fromisoformat(day))
             if bar.get("available_at") and aware(bar["available_at"]) < close:
                 raise ValueError("daily bar cannot be available before its session close")
-    cash = cfg.initial_cash
-    shares = {sid: 0.0 for sid in assets}
+    initial = dataset.get('initial_holdings', {})
+    if any(sid not in assets or not isfinite(float(q)) or float(q) < 0 for sid, q in initial.items()):
+        raise ValueError('invalid initial holdings')
+    shares = {sid: float(initial.get(sid, 0)) for sid in assets}
+    # 起始资金包含已有持仓，按首日开盘价扣除持仓市值后得到可用现金。
+    # Initial capital includes existing holdings. Deduct their opening value to obtain available cash.
+    initial_value = sum(q * float(bars[sid][days[0]]['open']) for sid, q in shares.items() if q)
+    cash = cfg.initial_cash - initial_value
+    if cash < 0:
+        raise ValueError('initial holdings exceed initial portfolio capital')
     marks = {}
     fills, equity, ledger = [], [], []
     pending = {}
@@ -165,7 +173,7 @@ def run_portfolio_backtest(dataset, config=None):
             raise ValueError("invalid portfolio ledger")
         equity.append({"date": day, "equity": nav, "cash": cash,
                        "holdings": {sid: q for sid, q in shares.items() if q > 1e-10}})
-        if index < cfg.lookback or (index - cfg.lookback) % cfg.rebalance_sessions or index == len(days)-1:
+        if dataset.get('hold_only') or index < cfg.lookback or (index - cfg.lookback) % cfg.rebalance_sessions or index == len(days)-1:
             continue
         cutoff = session_close(date.fromisoformat(day))
         eligible = {m["security_id"] for m in memberships if m["valid_from"] <= day
@@ -186,6 +194,8 @@ def run_portfolio_backtest(dataset, config=None):
                 if r["date"] == day and r["security_id"] in scores and aware(r["available_at"]) <= cutoff}
             if any(not isfinite(value) for value in scores.values()):
                 raise ValueError("nonfinite model score")
+            if not scores and dataset.get('hold_on_missing_signals'):
+                continue
         ranked = sorted((sid for sid, value in scores.items() if value > 0), key=lambda s: (-scores[s], s))[:cfg.top_n]
         targets, sector_weights = {}, {}
         for sid in ranked:

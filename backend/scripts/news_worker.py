@@ -14,6 +14,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from database.session import configured_database_url  # noqa: E402
 from sentiment.service import NewsIngestionService  # noqa: E402
 from sentiment.store import SentimentStore  # noqa: E402
+from runtime_status import heartbeat  # noqa: E402
 
 
 def main() -> None:
@@ -30,9 +31,9 @@ def main() -> None:
 
     while True:
         pending = store.pending_jobs(10)
+        latest = store.latest_completed_job()
         if not pending:
             settings = store.settings(smtp_configured=service.mailer.configured)
-            latest = store.latest_completed_job()
             latest_finished = datetime.fromisoformat(latest["finished_at"]) if latest and latest.get("finished_at") else None
             due = latest_finished is None or datetime.now(timezone.utc) - latest_finished >= timedelta(minutes=int(settings["interval_minutes"]))
             if args.backfill:
@@ -40,8 +41,9 @@ def main() -> None:
                 args.backfill = False
             elif settings.get("enabled") and due:
                 pending = [service.enqueue(mode="incremental")]
-        for job in pending:
-            service.run(job["id"])
+        if pending:
+            heartbeat(success=True, last_ingestion=(latest or {}).get("finished_at"), ingestion_in_progress=True)
+        results = [service.run(job["id"]) for job in pending]
 
         now_jst = datetime.now(timezone(timedelta(hours=9)))
         digest_time = store.settings().get("digest_time", "08:00")
@@ -54,6 +56,10 @@ def main() -> None:
             service.retry_failed_alerts()
         except Exception:
             logging.exception("Sentiment alert retry failed")
+        latest = store.latest_completed_job()
+        error = next((f"News ingestion {result['status']}; check its job for details"
+                      for result in results if result['status'] != "completed"), None)
+        heartbeat(success=error is None, error=error, last_ingestion=(latest or {}).get("finished_at"))
         if args.once:
             return
         sleep(max(args.poll_seconds, 5.0))

@@ -46,7 +46,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="app-shell">
-      <aside className={`sidebar ${open ? 'sidebar-open' : ''}`}>
+      <aside id="workspace-navigation" className={`sidebar ${open ? 'sidebar-open' : ''}`}>
         <div className="brand-row">
           <div className="brand-mark"><CandlestickChart size={20} /></div>
           <div><strong>TradingAI</strong><span>{t('brand.subtitle')}</span></div>
@@ -66,12 +66,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
+      {open && <button type="button" className="mobile-scrim" onClick={() => setOpen(false)} aria-label={t('closeMenu')} />}
       <div className="workspace">
         <header className="topbar">
-          <button className="icon-button mobile-only" onClick={() => setOpen(true)} aria-label={t('openMenu')}><Menu /></button>
+          <button className="icon-button mobile-only" onClick={() => setOpen(true)} aria-expanded={open} aria-controls="workspace-navigation" aria-label={t('openMenu')}><Menu /></button>
           <form className="symbol-search" onSubmit={submitSearch}>
             <Search size={17} />
-            <input value={symbol} onChange={(event) => setSymbol(event.target.value)} placeholder={t('searchPlaceholder')} />
+            <input aria-label={t('searchPlaceholder')} value={symbol} onChange={(event) => setSymbol(event.target.value)} placeholder={t('searchPlaceholder')} />
             <kbd>Enter</kbd>
           </form>
           <div className="topbar-tools">

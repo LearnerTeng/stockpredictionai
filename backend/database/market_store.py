@@ -363,6 +363,7 @@ class SqlAlchemyMarketDataStore:
                     "source": row.source,
                     "batch_id": row.ingestion_run_id,
                     "created_at": _iso(row.created_at),
+                    "updated_at": _iso(row.updated_at),
                 }
                 for row in rows
             ]

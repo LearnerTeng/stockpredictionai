@@ -19,11 +19,11 @@ def configured_database_url() -> str | None:
     return value or None
 
 
-def create_database_engine(database_url: str | None = None) -> Engine:
+def create_database_engine(database_url: str | None = None, *, connect_args: dict | None = None) -> Engine:
     url = database_url or configured_database_url()
     if not url:
         raise RuntimeError("DATABASE_URL is not configured")
-    return create_engine(url, pool_pre_ping=True)
+    return create_engine(url, pool_pre_ping=True, connect_args=connect_args or {})
 
 
 def session_factory(engine: Engine) -> sessionmaker[Session]:

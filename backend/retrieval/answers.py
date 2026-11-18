@@ -16,9 +16,9 @@ def answer_question(store, question, *, symbol=None, as_of=None, mode="hybrid", 
         "claims": [], "evidence": evidence, "model": None, "prompt_version": PROMPT_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(), "generation_tokens": 0}
     if evidence["items"]:
-        if client is None and os.getenv("OPENAI_API_KEY", "").strip():
-            from openai import OpenAI
-            client = OpenAI(timeout=60, max_retries=1)
+        if client is None:
+            from llm_gateway import structured_client
+            client = structured_client('research')
         if client is None:
             result["status"] = "evidence-only"
         else:
@@ -41,7 +41,7 @@ def answer_question(store, question, *, symbol=None, as_of=None, mode="hybrid", 
             if len(claims) > 12 or any(c["evidence_id"] not in documents or not 1 <= len(c["quote"]) <= 240
                 or c["quote"] not in documents[c["evidence_id"]] or not c["text"].strip() for c in claims):
                 raise ValueError("model returned an unverified evidence reference or quote")
-            result.update(claims=claims, model=model, status="answered" if claims else "insufficient-evidence",
+            result.update(claims=claims, model=getattr(response, 'model', model), status="answered" if claims else "insufficient-evidence",
                           generation_tokens=int(getattr(getattr(response, "usage", None), "total_tokens", 0)))
     with store.sessions.begin() as session:
         session.add(ResearchAnswer(id=result["id"], created_at=datetime.now(timezone.utc),

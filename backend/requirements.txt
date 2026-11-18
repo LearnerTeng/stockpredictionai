@@ -13,3 +13,4 @@ uvicorn==0.32.1
 exchange-calendars>=4.11,<5
 pgvector==0.4.2
 tiktoken>=0.8,<1
+jsonschema>=4.23,<5

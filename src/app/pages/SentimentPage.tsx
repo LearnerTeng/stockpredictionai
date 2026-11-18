@@ -6,6 +6,7 @@ import { api } from '../api'
 import { formatDateTime } from '../i18n/format'
 import { Change, DataStamp, ErrorPanel, LoadingPanel, number, PageHeader } from '../components/UI'
 import type { SentimentArticle, SentimentSettings } from '../types'
+import { NewsLinesPanel } from '../components/NewsLinesPanel'
 
 const windows = ['24h', '3d', '7d'] as const
 const markets = ['', 'US', 'JP'] as const
@@ -59,7 +60,9 @@ export function SentimentPage() {
         eyebrow={t('sentiment:eyebrow')}
         title={t('sentiment:title')}
         description={t('sentiment:description')}
-        action={<div className="sentiment-page-actions"><DataStamp value={data.generated_at} mode="NEWS" /><button className="secondary-button" onClick={() => setShowSettings((value) => !value)}><Settings2 />{t('sentiment:settings')}</button><button className="primary-button" disabled={refresh.isPending} onClick={() => refresh.mutate()}><RefreshCw className={refresh.isPending ? 'spin' : ''} />{t('sentiment:refresh')}</button></div>}
+        action={<div className="sentiment-page-actions"><button type="button" className="secondary-button"
+          onClick={() => {const target = document.getElementById('sentiment-research'); target?.focus(); target?.scrollIntoView({block: 'start'})}}>
+          {i18n.language.startsWith('zh') ? '研究工具' : i18n.language.startsWith('ja') ? '検証ツール' : 'Research tools'}</button><DataStamp value={data.generated_at} mode="NEWS" /><button className="secondary-button" onClick={() => setShowSettings((value) => !value)}><Settings2 />{t('sentiment:settings')}</button><button className="primary-button" disabled={refresh.isPending} onClick={() => refresh.mutate()}><RefreshCw className={refresh.isPending ? 'spin' : ''} />{t('sentiment:refresh')}</button></div>}
       />
 
       {(notice || refresh.error || saveSettings.error) && <div className={`inline-alert ${refresh.error || saveSettings.error ? '' : 'notice-success'}`}>{refresh.error?.message ?? saveSettings.error?.message ?? notice}</div>}
@@ -124,6 +127,7 @@ export function SentimentPage() {
       </section>
 
       <section className="panel coverage-strip"><strong>{t('sentiment:coverage')}</strong>{data.coverage.slice(0, 12).map((item) => <span key={`${item.provider}-${item.symbol}`}><b>{item.symbol}</b>{item.provider} · {item.coverage_start ? formatDateTime(item.coverage_start) : '--'} → {item.coverage_end ? formatDateTime(item.coverage_end) : '--'}</span>)}</section>
+      <NewsLinesPanel />
       <p className="disclaimer">{t('sentiment:disclaimer')}</p>
     </>
   )

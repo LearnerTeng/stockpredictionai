@@ -177,16 +177,19 @@ class SentimentStore:
             return self._job(row)
 
     def pending_jobs(self, limit: int = 10) -> list[dict[str, Any]]:
-        stale_before = utc_now() - timedelta(minutes=15)
-        with self.sessions.begin() as session:
-            stale = session.scalars(select(IngestionRun).where(
-                IngestionRun.source.like("news-%"), IngestionRun.status == "running",
-                IngestionRun.updated_at < stale_before,
-            )).all()
-            for row in stale:
-                row.status = "retrying"
-                row.notes = "Recovered after an interrupted worker"
-                row.updated_at = utc_now()
+        # PostgreSQL 采集进程持有同一把锁。能拿到锁时，残留的运行中任务可重试。
+        # PostgreSQL ingestion holds the same lock. Acquiring it makes leftover running jobs safe to retry.
+        with self.worker_lock() as acquired:
+            if acquired:
+                with self.sessions.begin() as session:
+                    query = select(IngestionRun).where(
+                        IngestionRun.source.like("news-%"), IngestionRun.status == "running")
+                    if self.engine.dialect.name != "postgresql":
+                        query = query.where(IngestionRun.updated_at < utc_now() - timedelta(minutes=15))
+                    for row in session.scalars(query):
+                        row.status = "retrying"
+                        row.notes = "Recovered after an interrupted worker"
+                        row.updated_at = utc_now()
         with self.sessions() as session:
             rows = session.scalars(select(IngestionRun).where(
                 IngestionRun.source.like("news-%"), IngestionRun.status.in_(("queued", "retrying")),

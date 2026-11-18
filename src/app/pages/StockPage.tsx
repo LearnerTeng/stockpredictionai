@@ -1,3 +1,4 @@
+import { AdvicePanel } from '../components/AdvicePanel'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ArrowLeft, Bot, CalendarClock, Database, ExternalLink, Newspaper, Play, TrendingUp } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -165,6 +166,7 @@ export function StockPage({ symbol }: { symbol: string }) {
         </article>
       </section>
 
+      <AdvicePanel symbol={symbol} />
       <section className="panel simulation-ticket">
         <div className="panel-title">
           <div><span>PAPER POSITION SIMULATION</span><h2>{t('simulationTitle')}</h2></div>

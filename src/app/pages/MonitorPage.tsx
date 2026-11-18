@@ -1,3 +1,4 @@
+import { AdvicePanel } from '../components/AdvicePanel'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDown,
@@ -266,7 +267,7 @@ export function MonitorPage() {
                   <td>{stock.ai_score === null ? '--' : <span className="score-value">{number(stock.ai_score, 0)}</span>}</td>
                   <td>{stock.projected_return_pct === null ? '--' : <Change value={stock.projected_return_pct} />}</td>
                   <td><div className="monitor-sentiment">{stock.sentiment?.score_1d === null || stock.sentiment?.score_1d === undefined ? '--' : <Change value={stock.sentiment.score_1d} suffix="" />}{stock.sentiment?.negative_shock && <span className="negative">!</span>}</div></td>
-                  <td>{stock.holding_pnl_pct === null ? '--' : <div><Change value={stock.holding_pnl_pct} />{stock.market_value !== null && <small>{money(stock.market_value, currency)}</small>}</div>}</td>
+                  <td>{stock.holding_pnl_pct === null ? '--' : <div className="holding-cell"><Change value={stock.holding_pnl_pct} />{stock.market_value !== null && <small>{money(stock.market_value, currency)}</small>}</div>}</td>
                   <td><div className="date-cell"><strong>{stock.latest_trade_date ?? t('monitor:noQuote')}</strong><span>{stock.last_refreshed_at ? formatDateTime(stock.last_refreshed_at) : t('monitor:neverRefreshed')}</span></div></td>
                   <td><div className="row-tools"><button className={stock.wanted ? 'wanted' : ''} title={stock.wanted ? t('monitor:removeWanted') : t('monitor:addWanted')} aria-label={stock.wanted ? t('monitor:removeWanted') : t('monitor:addWanted')} onClick={(event) => { event.stopPropagation(); wantedMutation.mutate({ symbol: stock.symbol, wanted: !stock.wanted }) }}><Star fill={stock.wanted ? 'currentColor' : 'none'} /></button><button title={t('monitor:editMetadata')} aria-label={t('monitor:editMetadata')} onClick={(event) => { event.stopPropagation(); setEditor(stock) }}><Pencil /></button></div></td>
                 </tr>
@@ -277,6 +278,7 @@ export function MonitorPage() {
         </div>
         <div className="pagination"><button disabled={page <= 1} onClick={() => updateUrl({ page: page - 1 }, false)}><ChevronLeft />{t('monitor:previous')}</button><span>{t('monitor:page', { page, pages })}</span><button disabled={page >= pages} onClick={() => updateUrl({ page: page + 1 }, false)}>{t('monitor:next')}<ChevronRight /></button></div>
       </section>
+      <AdvicePanel  />
       <p className="disclaimer">{t('monitor:disclaimer')}</p>
 
       {editor && <StockEditor stock={editor === 'new' ? null : editor} onClose={() => setEditor(null)} pending={saveMutation.isPending} onSave={(form) => saveMutation.mutate(form)} />}

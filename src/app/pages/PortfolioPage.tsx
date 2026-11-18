@@ -1,3 +1,6 @@
+import { SbiReturnsPanel } from '../components/SbiReturnsPanel'
+import { SbiPanel } from '../components/SbiPanel'
+import { AdvicePanel } from '../components/AdvicePanel'
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -19,6 +22,7 @@ export function PortfolioPage() {
     queryKey: ['portfolio', selectedPortfolioId],
     queryFn: () => api.portfolio(selectedPortfolioId),
     enabled: queriesEnabled,
+    refetchInterval: selectedItem?.account_type === 'nisa' ? 30000 : false,
   })
   const performance = useQuery({
     queryKey: ['performance', selectedPortfolioId],
@@ -78,10 +82,10 @@ export function PortfolioPage() {
         </article>
       </section>
       {data.account_type === 'nisa' && (
-        <section className="panel portfolio-source-note">
-          <strong>{t('snapshotTitle')}</strong>
-          <span>{t('snapshotDescription')}</span>
-        </section>
+        <>
+          <SbiReturnsPanel portfolioId={selectedPortfolioId} />
+          <SbiPanel portfolioId={selectedPortfolioId} />
+        </>
       )}
       {riskData && riskData.status === 'ok' && (
         <section className="panel">
@@ -137,6 +141,7 @@ export function PortfolioPage() {
           </tr>
         ))}</tbody></table></div>
       </section>
+      <AdvicePanel portfolioId={selectedPortfolioId} />
     </>
   )
 }

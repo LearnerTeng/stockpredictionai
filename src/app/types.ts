@@ -456,3 +456,87 @@ export interface IngestionJob {
   started_at: string | null
   finished_at: string | null
 }
+export type NewsLine = 'deepseek' | 'ultra' | 'experiment' | 'holdings'
+export interface NewsComparison {
+  id: string; recipe: string; selected: NewsLine[]; initial_capital: number
+  model_pins?: Record<string, {model: string; provider: string; version: string}>
+  period?: [string, string]; snapshot_as_of?: string
+  results: Partial<Record<NewsLine, { status: string; reason?: string; replay?: {
+    equity_curve: { date: string; equity: number }[]; metrics: { return_pct: number; max_drawdown_pct: number; commission: number; slippage: number }
+  } }>>
+}
+export interface NewsLineStatus {
+  models: Record<string, { configured: boolean; model: string; jobs: Record<string, number> }>
+  enabled: NewsLine[]; comparisons: NewsComparison[]
+}
+
+export type SbiStatus = {
+  enabled: boolean
+  snapshot: { through: string; confirmed_through: string } | null
+  files: { id: string; file: string; status: string; rows?: number; error?: string; fingerprint?: string;
+    overlaps?: {key: string; symbol: string; date: string; side: string; units: string; settlement_jpy: string; existing: number; exported: number}[] }[]
+  valuations: { id: string; symbol: string; day: string; nav: string; available_at: string }[]
+  alerts: { id: string; symbol: string; nav_date: string; change_pct: number; delivery: string; error?: string;
+    news: {title: string; url?: string; available_at: string}[] }[]
+}
+
+export type RuntimeStatus = {
+  status: string
+  services: Record<string, {status: string; pid?: number; last_success?: string; last_ingestion?: string;
+    retry_in_seconds: number; error?: string; ingestion_in_progress?: boolean}>
+}
+
+export type SentimentEvaluationInput = {
+  start: string
+  end: string
+  symbols: string[]
+  line: 'deepseek' | 'ultra'
+  as_of?: string
+  model_pins?: Record<string, { provider: string; model: string; version: string }>
+}
+
+export type SentimentEvaluation = {
+  id: string
+  inputs: SentimentEvaluationInput
+  benchmarks: Record<'US' | 'JP', string>
+  metrics: Record<'US' | 'JP', {horizon: number; samples: number; status: string;
+    baseline: {mae_pct: number; direction_accuracy: number} | null;
+    sentiment: {mae_pct: number; direction_accuracy: number} | null}[]>
+  coverage: Record<string, {market: string; stock_bars: number; benchmark_bars: number; sessions_with_news: number; exchange_sessions: number}>
+}
+
+export type SbiFundHolding = {
+  quantity: number
+  last_price: number
+  average_cost: number
+  reported_market_value: number
+  reported_cost_basis: number
+}
+export type SbiFundDaily = {
+  code: string
+  bucket: string
+  value: number
+  return_jpy: number
+  holdings: SbiFundHolding | null
+}
+export type SbiFundReturn = SbiFundDaily & {
+  name: string
+  symbol: string | null
+  held: boolean
+  sold: number
+  distributions: number
+  purchases: number
+  fees: number
+  return_pct: number
+}
+export type SbiReturnTotals = Omit<SbiFundReturn, 'code' | 'bucket' | 'holdings' | 'name' | 'symbol' | 'held' | 'return_pct'> & {return_pct: number | null}
+export type SbiReturns = {
+  latest: {as_of: string; holdings_observed_at: string | null; totals: SbiReturnTotals; funds: SbiFundReturn[]} | null
+  history: {as_of: string; holdings_observed_at: string | null; totals: SbiReturnTotals; funds: SbiFundDaily[]}[]
+}
+export type SbiFundHistory = {
+  code: string
+  as_of?: string
+  events: {day: string; action: string; bucket: string; units: number; amount: number; fee: number;
+    ordinary: number; special: number; holding_units: number; nav: number; value: number; principal: number}[]
+}

@@ -1,3 +1,4 @@
+import { AdvicePanel } from '../components/AdvicePanel'
 import { useMutation } from '@tanstack/react-query'
 import { Bot, BrainCircuit, Database, ShieldAlert, Sparkles } from 'lucide-react'
 import { useState } from 'react'
@@ -30,16 +31,16 @@ export function AssistantPage() {
           <div className="context-item"><Bot /><div><strong>{t('fallbackTitle')}</strong><span>{t('fallbackText')}</span></div></div>
         </aside>
         <div className="assistant-main">
-          <article className="panel analysis-composer">
+          <form className="panel analysis-composer" onSubmit={event => { event.preventDefault(); if (symbol.trim() && !analysis.isPending) analysis.mutate() }}>
             <label htmlFor="assistant-symbol">{t('symbol')}</label>
-            <div><input id="assistant-symbol" value={symbol} onChange={(event) => setSymbol(event.target.value.toUpperCase())} maxLength={16} /><button className="primary-button" onClick={() => analysis.mutate()} disabled={!symbol.trim() || analysis.isPending}><Sparkles size={17} />{analysis.isPending ? t('running') : t('generate')}</button></div>
-            <p>{t('process')}</p>
-          </article>
+            <div><input id="assistant-symbol" value={symbol} onChange={(event) => setSymbol(event.target.value.toUpperCase())} maxLength={16} /><button className="primary-button" disabled={!symbol.trim() || analysis.isPending}><Sparkles size={17} />{analysis.isPending ? t('running') : t('generate')}</button></div>
+          </form>
           {analysis.error && <div className="inline-alert">{analysis.error.message}</div>}
           {result ? <article className="panel analysis-result"><span className="eyebrow">AI ANALYSIS · {result.language}</span><h2>{result.title}</h2><p className="analysis-summary">{result.summary}</p><div className="analysis-sections">{result.sections.map((section) => <section key={section.heading}><h3>{section.heading}</h3><ul>{section.bullets.map((bullet) => <li key={bullet}>{bullet}</li>)}</ul></section>)}</div><footer>{result.disclaimer}</footer></article> : <article className="panel assistant-empty"><Sparkles /><h2>{t('waitingTitle')}</h2><p>{t('waitingText')}</p></article>}
         </div>
       </section>
       <ResearchPanel />
+      <AdvicePanel controls />
     </>
   )
 }

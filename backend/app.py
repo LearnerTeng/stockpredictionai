@@ -713,10 +713,68 @@ def portfolios() -> tuple[Any, int]:
 
 @app.get("/portfolio/performance")
 def portfolio_performance() -> tuple[Any, int]:
+    portfolio_id = request.args.get("id", "primary")
     try:
-        return jsonify(trading_store.get_performance(request.args.get("id", "primary"))), 200
+        return jsonify(trading_store.get_performance(portfolio_id)), 200
     except ValueError as err:
+        if any(p["id"] == portfolio_id and p["account_type"] == "nisa" for p in trading_store.list_portfolios()):
+            return jsonify(portfolio_id=portfolio_id, points=[]), 200
         return jsonify({"error": str(err)}), 404
+
+
+@app.route("/portfolio/sbi", methods=["GET", "POST"])
+def portfolio_sbi():
+    from trading.sbi import SbiImport
+    try:
+        portfolio_id = request.args.get("id", "nisa")
+        if not any(p["id"] == portfolio_id and p["account_type"] == "nisa" for p in trading_store.list_portfolios()):
+            return jsonify(error="NISA portfolio not found"), 404
+        store, _ = _require_sentiment()
+        service = SbiImport(store.sessions)
+        if request.method == "POST":
+            payload = request.get_json()
+            service.resolve(portfolio_id, payload["id"], payload["fingerprint"], payload["additions"])
+            return jsonify(status="queued"), 202
+        return jsonify(service.status(portfolio_id))
+    except (KeyError, ValueError, TypeError) as error:
+        return jsonify(error=str(error)), 400
+    except RuntimeError as error:
+        return jsonify(error=str(error)), 503
+
+
+@app.route("/portfolio/sbi/returns", methods=["GET", "POST"])
+def portfolio_sbi_returns():
+    import csv
+    from datetime import date
+    from scripts.sbi_holdings_snapshot import observed_timestamp
+    from trading.sbi_returns import get_report, save_report
+
+    portfolio_id = request.args.get("id", "nisa")
+    try:
+        store, _ = _require_sentiment()
+        if request.method == "GET":
+            return jsonify(get_report(store.sessions, portfolio_id, request.args.get("code")))
+        returns, holdings = request.files.get("returns"), request.files.get("holdings")
+        if returns is None:
+            raise ValueError("Select the SBI all-period return CSV")
+        raw = returns.read(1_000_001)
+        snapshot = holdings.read(1_000_001) if holdings else None
+        if len(raw) > 1_000_000 or (snapshot and len(snapshot) > 1_000_000):
+            raise ValueError("CSV exceeds 1 MB")
+        apply = request.form.get("apply") == "true"
+        return jsonify(save_report(store.sessions, portfolio_id, date.fromisoformat(request.form["as_of"]),
+            raw, int(request.form["total"]), snapshot, apply=apply,
+            holdings_observed_at=observed_timestamp(holdings.filename) if holdings else None))
+    except (KeyError, ValueError, TypeError, csv.Error) as error:
+        return jsonify(error=str(error)), 400
+    except RuntimeError:
+        return jsonify(error="SBI return database is unavailable"), 503
+
+
+@app.get("/runtime/status")
+def runtime_status():
+    from runtime_status import launcher_status
+    return jsonify(launcher_status())
 
 
 @app.get("/portfolio/risk")
@@ -914,16 +972,8 @@ def _analysis_schema() -> dict[str, Any]:
 
 
 def _create_openai_client():
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        return None
-
-    try:
-        from openai import OpenAI
-    except ImportError:
-        return None
-
-    return OpenAI(api_key=api_key)
+    from llm_gateway import structured_client
+    return structured_client('explanation')
 
 
 def _build_local_analysis(req: AnalyzeRequest) -> dict[str, Any]:
@@ -1121,7 +1171,10 @@ def research_query():
     try:
         source, _ = _require_sentiment()
         store = RetrievalStore(source.sessions)
-        options = {"symbol": payload.get("symbol"), "as_of": payload.get("as_of"), "mode": payload.get("mode", "hybrid")}
+        options = {"symbol": payload.get("symbol"), "as_of": payload.get("as_of"), "mode": payload.get("mode", "keyword")}
+        from ai_runtime import settings as ai_settings
+        if options["mode"] != "keyword" and ai_settings(source.sessions)["keyword_only"]:
+            return jsonify({"error": "Vector retrieval must be explicitly enabled in AI settings"}), 409
         if request.path.endswith("/answer"):
             result = answer_question(store, payload.get("query"), language=payload.get("language", "zh-CN"), **options)
         else:
@@ -1423,6 +1476,12 @@ def manual_order_ticket() -> tuple[Any, int]:
     except Exception as err:  # noqa: BLE001
         return jsonify({"error": f"Manual order ticket failed: {err}"}), 500
 
+
+from sentiment.line_api import register_line_api
+register_line_api(app, _require_sentiment, trading_store)
+
+from advice import register_advice
+register_advice(app, _require_sentiment, market_data_store, trading_store)
 
 if __name__ == "__main__":
     app.run(host=os.getenv("API_HOST", "127.0.0.1"), port=8000, debug=False)

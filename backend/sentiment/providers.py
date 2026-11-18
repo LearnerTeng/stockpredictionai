@@ -8,6 +8,8 @@ import re
 from typing import Any, Protocol
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 
+from time import monotonic, sleep
+
 import requests
 
 
@@ -176,17 +178,23 @@ class GdeltNewsProvider:
 
     def __init__(self, http: JsonHttpClient | None = None):
         self.http = http or JsonHttpClient()
+        self._next_request_at = 0.0
 
     def fetch(self, symbol: str, company_name: str | None, start: datetime, end: datetime, limit: int = 250) -> list[ProviderArticle]:
         plain_symbol = symbol.removesuffix(".T")
         terms = [f'"{company_name}"' if company_name else "", f'"{plain_symbol}"']
-        query = " OR ".join(term for term in terms if term)
+        terms = [term for term in terms if term]
+        query = f"({' OR '.join(terms)})" if len(terms) > 1 else terms[0]
         params = {
             "query": query, "mode": "artlist", "format": "json",
             "maxrecords": str(min(max(limit, 1), 250)), "sort": "datedesc",
             "startdatetime": start.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S"),
             "enddatetime": end.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S"),
         }
+        wait = self._next_request_at - monotonic()
+        if wait > 0:
+            sleep(wait)
+        self._next_request_at = monotonic() + 5.5
         payload = self.http.get(f"https://api.gdeltproject.org/api/v2/doc/doc?{urlencode(params, quote_via=quote_plus)}")
         articles: list[ProviderArticle] = []
         for item in payload.get("articles") or []:

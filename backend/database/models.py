@@ -14,6 +14,36 @@ class Base(DeclarativeBase):
     pass
 
 
+class AiCall(Base):
+    __tablename__ = 'ai_calls'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(String(128))
+    background: Mapped[bool] = mapped_column(Boolean)
+    status: Mapped[str] = mapped_column(String(64))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    lease_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tokens: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class AdviceJob(Base):
+    __tablename__ = 'advice_jobs'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    portfolio_id: Mapped[str] = mapped_column(String(64))
+    kind: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    priority: Mapped[int] = mapped_column(Integer)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    lease_token: Mapped[str | None] = mapped_column(String(64))
+    payload: Mapped[dict] = mapped_column(JSON)
+    result: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(String(128))
+
+
 class Instrument(Base):
     __tablename__ = "instruments"
 
@@ -481,3 +511,27 @@ class PaperCycle(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     dataset_hash: Mapped[str] = mapped_column(String(64))
     report: Mapped[dict] = mapped_column(JSON)
+
+
+class NewsModelRun(Base):
+    __tablename__ = 'news_model_runs'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(ForeignKey('research_documents.id'), index=True)
+    line: Mapped[str] = mapped_column(String(32), index=True)
+    model: Mapped[str] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    attempts: Mapped[int] = mapped_column(Integer)
+    retry_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict] = mapped_column(JSON)
+    result: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(String(128))
+
+class SbiRecord(Base):
+    __tablename__ = "sbi_records"
+
+    portfolio_id: Mapped[str] = mapped_column(ForeignKey("portfolios.id"), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    data: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

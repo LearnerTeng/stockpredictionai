@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { SbiReturnsPanel } from '../components/SbiReturnsPanel'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowUpRight, CircleGauge, Crosshair, Radar, WalletCards } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -7,8 +9,24 @@ import { PerformanceChart } from '../components/Charts'
 import { Change, DataStamp, ErrorPanel, LoadingPanel, money, PageHeader, Score } from '../components/UI'
 
 export function DashboardPage() {
-  const { t } = useTranslation('dashboard')
+  const { t, i18n } = useTranslation('dashboard')
+  const [account, setAccount] = useState<'nisa' | 'paper'>('nisa')
+  const sbi = useQuery({queryKey: ['sbi-returns', 'nisa'], queryFn: () => api.sbiReturns('nisa'), refetchInterval: 60000, retry: false})
+  // 尚无 SBI 快照时显示模拟盘概览。
+  // Show the paper dashboard until an SBI snapshot is available.
+  const showSbi = account === 'nisa' && Boolean(sbi.data?.latest)
+  const paperLabel = i18n.language.startsWith('zh') ? '模拟盘' : i18n.language.startsWith('ja') ? '模擬取引' : 'Paper portfolio'
   const dashboard = useQuery({ queryKey: ['dashboard'], queryFn: api.dashboard })
+  const accountSwitch = sbi.data?.latest && <div className="dashboard-account-switch" role="group" aria-label="SBI NISA / Paper portfolio">
+    <button className={account === 'nisa' ? 'active' : ''} aria-pressed={account === 'nisa'}
+      onClick={() => setAccount('nisa')}>SBI NISA</button>
+    <button className={account === 'paper' ? 'active' : ''} aria-pressed={account === 'paper'}
+      onClick={() => setAccount('paper')}>{paperLabel}</button>
+  </div>
+  if (showSbi) return <>
+    <header className="page-header dashboard-header"><h1>SBI NISA</h1>{accountSwitch}</header>
+    <SbiReturnsPanel portfolioId="nisa" showPositions />
+  </>
   if (dashboard.isPending) return <LoadingPanel label={t('loading')} />
   if (dashboard.error) return <ErrorPanel error={dashboard.error} />
   const data = dashboard.data
@@ -20,7 +38,7 @@ export function DashboardPage() {
         eyebrow={t('eyebrow')}
         title={t('title')}
         description={t('description')}
-        action={<div className="dashboard-actions"><DataStamp value={data.generated_at} mode={data.data_mode} /><Link to="/monitor" className="primary-button"><Radar />{t('enterMonitor')}</Link></div>}
+        action={<div className="dashboard-actions">{accountSwitch}<DataStamp value={data.generated_at} mode={data.data_mode} /><Link to="/monitor" className="primary-button"><Radar />{t('enterMonitor')}</Link></div>}
       />
 
       <section className="kpi-grid">

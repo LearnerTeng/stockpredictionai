@@ -27,6 +27,17 @@ function useEChart(option: EChartsCoreOption) {
   return ref
 }
 
+export function NewsComparisonChart({ series }: { series: { name: string; points: {date: string; equity: number}[] }[] }) {
+  const option: EChartsCoreOption = {
+    tooltip: {trigger: 'axis'}, legend: {textStyle: {color: '#91a4ba'}},
+    grid: {left: 65, right: 25, top: 45, bottom: 40},
+    xAxis: {type: 'category', data: series[0]?.points.map(p => p.date)}, yAxis: {type: 'value', scale: true},
+    series: series.map(s => ({name: s.name, type: 'line', showSymbol: false, data: s.points.map(p => p.equity)})),
+  }
+  const ref = useEChart(option)
+  return <div ref={ref} style={{height: 320, width: '100%'}} />
+}
+
 const baseAxis = {
   axisLine: { lineStyle: { color: '#26364b' } },
   axisLabel: { color: '#7890aa', fontFamily: 'Space Grotesk' },
